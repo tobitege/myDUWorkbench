@@ -1,0 +1,120 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MyDu.Views.LuaBackupManagerDialog"
+        Title="LUA Backups"
+        Width="1280"
+        Height="840"
+        MinWidth="980"
+        MinHeight="640"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="12"
+          RowDefinitions="Auto,3*,2*,Auto"
+          RowSpacing="10">
+        <Grid Grid.Row="0"
+              ColumnDefinitions="*,Auto,Auto,Auto"
+              ColumnSpacing="8">
+            <TextBlock Grid.Column="0"
+                       x:Name="BackupLocationText"
+                       VerticalAlignment="Center"
+                       Text="Backup folder:" />
+            <Button Grid.Column="1"
+                    Content="Refresh"
+                    Click="OnRefreshClick" />
+            <Button Grid.Column="2"
+                    Content="Delete selected"
+                    Click="OnDeleteSelectedClick" />
+            <Button Grid.Column="3"
+                    Content="Delete all"
+                    Click="OnDeleteAllClick" />
+        </Grid>
+
+        <DataGrid Grid.Row="1"
+                  x:Name="BackupsGrid"
+                  AutoGenerateColumns="False"
+                  CanUserSortColumns="True"
+                  CanUserResizeColumns="True"
+                  GridLinesVisibility="Horizontal"
+                  UseLogicalScrollable="True"
+                  SelectionChanged="OnBackupsSelectionChanged">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Backup UTC"
+                                    Binding="{Binding BackupUtc}"
+                                    x:CompileBindings="False"
+                                    Width="190"
+                                    MinWidth="150" />
+                <DataGridTextColumn Header="ElementId"
+                                    Binding="{Binding ElementId}"
+                                    x:CompileBindings="False"
+                                    Width="110"
+                                    MinWidth="90" />
+                <DataGridTextColumn Header="Element"
+                                    Binding="{Binding ElementDisplayName}"
+                                    x:CompileBindings="False"
+                                    Width="2*"
+                                    MinWidth="160" />
+                <DataGridTextColumn Header="Node"
+                                    Binding="{Binding NodeLabel}"
+                                    x:CompileBindings="False"
+                                    Width="2*"
+                                    MinWidth="160" />
+                <DataGridTextColumn Header="Property"
+                                    Binding="{Binding PropertyName}"
+                                    x:CompileBindings="False"
+                                    Width="140"
+                                    MinWidth="110" />
+                <DataGridTextColumn Header="Preview"
+                                    Binding="{Binding Preview}"
+                                    x:CompileBindings="False"
+                                    Width="3*"
+                                    MinWidth="220" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <Grid Grid.Row="2"
+              ColumnDefinitions="*,*"
+              ColumnSpacing="10">
+            <Grid Grid.Column="0"
+                  RowDefinitions="Auto,*"
+                  RowSpacing="6">
+                <TextBlock Grid.Row="0"
+                           FontWeight="SemiBold"
+                           Text="Current editor content" />
+                <TextBox Grid.Row="1"
+                         x:Name="CurrentContentTextBox"
+                         IsReadOnly="True"
+                         AcceptsReturn="True"
+                         TextWrapping="NoWrap"
+                         FontFamily="Consolas"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto" />
+            </Grid>
+            <Grid Grid.Column="1"
+                  RowDefinitions="Auto,*"
+                  RowSpacing="6">
+                <TextBlock Grid.Row="0"
+                           FontWeight="SemiBold"
+                           Text="Selected backup content" />
+                <TextBox Grid.Row="1"
+                         x:Name="SelectedBackupContentTextBox"
+                         IsReadOnly="True"
+                         AcceptsReturn="True"
+                         TextWrapping="NoWrap"
+                         FontFamily="Consolas"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto" />
+            </Grid>
+        </Grid>
+
+        <StackPanel Grid.Row="3"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <Button x:Name="LoadIntoEditorButton"
+                    Content="Load into editor"
+                    IsEnabled="False"
+                    Click="OnLoadIntoEditorClick" />
+            <Button Content="Close"
+                    Click="OnCloseClick" />
+        </StackPanel>
+    </Grid>
+</Window>

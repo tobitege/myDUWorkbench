@@ -1,0 +1,126 @@
+{
+  "name": "Lua",
+  "scopeName": "source.lua",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#duKeywords"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#constants"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.lua",
+          "begin": "--\\[\\[",
+          "end": "\\]\\]"
+        },
+        {
+          "name": "comment.line.double-dash.lua",
+          "match": "--.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.lua",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.lua",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.lua",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.lua",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.long-bracket.lua",
+          "begin": "\\[\\[",
+          "end": "\\]\\]"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.lua",
+          "match": "\\b(?:0x[0-9A-Fa-f]+|\\d+(?:\\.\\d+)?)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.lua",
+          "match": "\\bfunction\\s+([A-Za-z_][A-Za-z0-9_\\.:]*)"
+        }
+      ]
+    },
+    "duKeywords": {
+      "patterns": [
+        {
+          "name": "support.type.du.lua",
+          "match": "\\b(?:Adjustor|Airbrake|Airfoil|AntiGravityGenerator|AtmosphericEngine|BaseShieldGenerator|BrakeEngine|Construct|Container|ControlUnit|CoreUnit|Counter|DUAtlasCelestialBody|DUMultiLanguageString|Databank|DetectionZone|Door|Element|Emitter|Engine|Firework|ForceField|FueledEngine|Gyro|HoverEngine|Industry|LandingGear|LaserDetector|LaserEmitter|Library|Light|ManualButton|ManualSwitch|MiningUnit|PlasmaExtractor|Player|PressureTile|Radar|Receiver|RenderScript|RocketEngine|Screen|ShieldGenerator|SpaceBrake|SpaceEngine|SpaceMiningUnit|SurfaceEngine|System|Telemeter|Transponder|Unit|VerticalBooster|WarpDrive|Weapon)\\b"
+        },
+        {
+          "name": "support.variable.du.lua",
+          "match": "\\b(?:construct|library|player|system|unit|vec2|vec3)\\b"
+        },
+        {
+          "name": "support.function.event.du.lua",
+          "match": "\\b(?:onAbsorbed|onActionLoop|onActionStart|onActionStop|onBankUpdate|onCalibrated|onCameraChanged|onCompleted|onConstructDocked|onContentUpdate|onDestroyed|onDocked|onDown|onElementBroken|onElementDamaged|onElementDestroyed|onElementRepaired|onElementRestored|onEnter|onEnterLockdown|onFired|onFlush|onHit|onIdentified|onInputText|onLeave|onLeaveLockdown|onLoss|onMissed|onMouseDown|onMouseUp|onOutputChanged|onParentChanged|onPlayerBoarded|onPvPTimer|onReceived|onReload|onReloaded|onRestored|onSent|onStarted|onStatusChanged|onStopped|onStressChanged|onTimer|onToggled|onUndocked|onUpdate|onVenting|onVRStationEntered)\\b"
+        },
+        {
+          "name": "constant.language.du.lua",
+          "match": "\\b(?:CONTROL|CSV|DRM|ELECTRICITY|FLUID|FUEL|FPS|HEAT|IN|ITEM|JSON|OUT|PVP|SIGNAL|T50|UTC)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.lua",
+          "match": "\\b(?:and|break|do|else|elseif|end|for|function|goto|if|in|local|not|or|repeat|return|then|until|while)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.lua",
+          "match": "\\b(?:false|nil|true)\\b"
+        }
+      ]
+    }
+  },
+  "uuid": "f5ef1027-8453-43b7-95e2-10f0f6f39f3b"
+}

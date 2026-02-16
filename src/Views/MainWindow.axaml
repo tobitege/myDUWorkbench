@@ -1,0 +1,832 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MyDu.ViewModels"
+        xmlns:hier="clr-namespace:Avalonia.Controls.DataGridHierarchical;assembly=Avalonia.Controls.DataGrid"
+        xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        d:DesignWidth="1280"
+        d:DesignHeight="900"
+        x:Class="MyDu.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="myDU Construct Workbench"
+        MinWidth="980"
+        MinHeight="720">
+
+    <Design.DataContext>
+        <vm:MainWindowViewModel />
+    </Design.DataContext>
+
+    <Grid Margin="16"
+          RowDefinitions="Auto,*"
+          RowSpacing="10">
+        <StackPanel Grid.Row="0"
+                    Spacing="4">
+            <TextBlock FontSize="22"
+                       FontWeight="Bold"
+                       Text="myDU Construct Data Workbench" />
+            <TextBlock Foreground="DarkOrange"
+                       Text="{Binding StatusMessage}" />
+            <TextBlock Foreground="DarkSeaGreen"
+                       Text="{Binding DatabaseAvailabilityStatus, StringFormat=DB: {0}}" />
+        </StackPanel>
+
+        <Border x:Name="MainWorkbenchRoot"
+                Grid.Row="1"
+                Padding="10"
+                BorderThickness="1"
+                CornerRadius="6">
+            <TabControl>
+                <TabItem Header="Constructs">
+                    <Grid RowDefinitions="Auto,Auto,*"
+                          RowSpacing="10">
+                        <WrapPanel Orientation="Horizontal"
+                                   ItemWidth="390"
+                                   ItemHeight="196">
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="Construct Name Search (3+ chars, wildcard * supported)" />
+                                    <Grid ColumnDefinitions="180,*"
+                                          ColumnSpacing="8">
+                                        <TextBox Grid.Column="0"
+                                                 Text="{Binding ConstructNameSearchInput}"
+                                                 Width="180"
+                                                 MaxWidth="180"
+                                                 HorizontalAlignment="Left"
+                                                 Watermark="Big or Big*">
+                                            <TextBox.KeyBindings>
+                                                <KeyBinding Gesture="Enter"
+                                                            Command="{Binding UseConstructSuggestionAndLoadCommand}" />
+                                            </TextBox.KeyBindings>
+                                        </TextBox>
+                                        <TextBlock Grid.Column="1"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding ConstructSearchStatus}" />
+                                    </Grid>
+                                    <ComboBox ItemsSource="{Binding ConstructNameSuggestions}"
+                                              SelectedItem="{Binding SelectedConstructNameSuggestion}"
+                                              Width="360"
+                                              MaxWidth="360"
+                                              HorizontalAlignment="Left">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding DisplayLabel}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                        <ComboBox.KeyBindings>
+                                            <KeyBinding Gesture="Enter"
+                                                        Command="{Binding UseConstructSuggestionAndLoadCommand}" />
+                                        </ComboBox.KeyBindings>
+                                    </ComboBox>
+                                    <TextBlock Text="Construct ID" />
+                                    <TextBox Text="{Binding ConstructIdInput}"
+                                             Width="100"
+                                             MaxWidth="100"
+                                             HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="Player Name Search (3+ chars, wildcard * supported)" />
+                                    <Grid ColumnDefinitions="180,*"
+                                          ColumnSpacing="8">
+                                        <TextBox Grid.Column="0"
+                                                 Text="{Binding PlayerNameSearchInput}"
+                                                 Width="180"
+                                                 MaxWidth="180"
+                                                 HorizontalAlignment="Left"
+                                                 Watermark="tob or tob*" />
+                                        <TextBlock Grid.Column="1"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding PlayerSearchStatus}" />
+                                    </Grid>
+                                    <ComboBox ItemsSource="{Binding PlayerNameSuggestions}"
+                                              SelectedItem="{Binding SelectedPlayerNameSuggestion}"
+                                              Width="360"
+                                              MaxWidth="360"
+                                              HorizontalAlignment="Left">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding DisplayLabel}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                    <TextBlock Text="Player ID (optional)" />
+                                    <TextBox Text="{Binding PlayerIdInput}"
+                                             Width="100"
+                                             MaxWidth="100"
+                                             HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+                        </WrapPanel>
+
+                        <WrapPanel Grid.Row="1"
+                                   Orientation="Horizontal"
+                                   ItemWidth="200"
+                                   HorizontalAlignment="Left">
+                            <Button Content="Load DB Snapshot"
+                                    Command="{Binding LoadDatabaseCommand}" />
+                            <Button Content="Export getConstructData JSON"
+                                    Click="OnExportGetConstructDataClick" />
+                        </WrapPanel>
+
+                        <TabControl Grid.Row="2">
+                            <TabItem Header="Element Properties">
+                                <Border Padding="10"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Margin="0,6,0,0">
+                                    <Grid RowDefinitions="Auto,*"
+                                          RowSpacing="8">
+                                        <StackPanel Grid.Row="0"
+                                                    Orientation="Horizontal"
+                                                    Spacing="6"
+                                                    HorizontalAlignment="Left">
+                                            <Button Content="Expand all"
+                                                    Width="110"
+                                                    Command="{Binding ExpandAllElementPropertiesCommand}" />
+                                            <Button Content="Collapse all"
+                                                    Width="110"
+                                                    Command="{Binding CollapseAllElementPropertiesCommand}" />
+                                            <TextBlock Text="Filter"
+                                                       VerticalAlignment="Center"
+                                                       Margin="10,0,0,0" />
+                                            <ComboBox Width="260"
+                                                      IsEditable="True"
+                                                      Text="{Binding ElementTypeNameFilterInput}"
+                                                      ItemsSource="{Binding ElementTypeFilterHistory}"
+                                                      SelectedItem="{Binding SelectedElementTypeFilterHistoryItem}"
+                                                      ToolTip.Tip="Wildcard filter examples: &#10;Big* = starts with Big&#10;*Engine* = contains Engine&#10;Anti-Gravity ?enerator = one-char wildcard&#10;Case-insensitive">
+                                                <ComboBox.KeyBindings>
+                                                    <KeyBinding Gesture="Enter"
+                                                                Command="{Binding ApplyElementTypeNameFilterCommand}" />
+                                                </ComboBox.KeyBindings>
+                                            </ComboBox>
+                                            <Button Content="Filter"
+                                                    Width="75"
+                                                    Command="{Binding ApplyElementTypeNameFilterCommand}" />
+                                            <Button Content="Clear"
+                                                    Width="70"
+                                                    Command="{Binding ClearElementTypeFilterHistoryCommand}" />
+                                        </StackPanel>
+
+                                        <DataGrid Grid.Row="1"
+                                                  x:Name="ElementPropertiesGrid"
+                                                  AutoGenerateColumns="False"
+                                                  HierarchicalRowsEnabled="True"
+                                                  HierarchicalModel="{Binding ElementPropertiesModel}"
+                                                  SelectedItem="{Binding SelectedElementPropertyNode}"
+                                                  CanUserSortColumns="True"
+                                                  CanUserResizeColumns="True"
+                                                  GridLinesVisibility="Horizontal"
+                                                  UseLogicalScrollable="True">
+                                            <DataGrid.Columns>
+                                                <DataGridHierarchicalColumn Header="Node"
+                                                                            SortMemberPath="Item.NodeLabel"
+                                                                            Width="2*"
+                                                                            MinWidth="180"
+                                                                            x:CompileBindings="False">
+                                                    <DataGridHierarchicalColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.NodeLabel}" />
+                                                        </DataTemplate>
+                                                    </DataGridHierarchicalColumn.CellTemplate>
+                                                </DataGridHierarchicalColumn>
+                                                <DataGridTemplateColumn Header="ElementId"
+                                                                        SortMemberPath="Item.ElementId"
+                                                                        Width="120"
+                                                                        MinWidth="100"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ElementIdText}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Element"
+                                                                        SortMemberPath="Item.ElementTypeName"
+                                                                        Width="2*"
+                                                                        MinWidth="180"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ElementTypeName}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Property"
+                                                                        SortMemberPath="Item.PropertyName"
+                                                                        Width="*"
+                                                                        MinWidth="130"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.PropertyName}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Type"
+                                                                        SortMemberPath="Item.PropertyType"
+                                                                        Width="90"
+                                                                        MinWidth="70"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.PropertyTypeText}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Bytes"
+                                                                        SortMemberPath="Item.ByteLength"
+                                                                        Width="90"
+                                                                        MinWidth="70"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ByteLengthText}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Preview"
+                                                                        SortMemberPath="Item.ValuePreview"
+                                                                        Width="3*"
+                                                                        MinWidth="220"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ValuePreview}" TextWrapping="Wrap" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </Grid>
+                                </Border>
+                            </TabItem>
+
+                            <TabItem Header="LUA blocks">
+                                <Border Padding="10"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Margin="0,6,0,0">
+                                    <Grid RowDefinitions="Auto,3*,4*"
+                                          RowSpacing="8">
+                                        <WrapPanel Grid.Row="0"
+                                                   Orientation="Horizontal"
+                                                   ItemWidth="140"
+                                                   HorizontalAlignment="Left">
+                                            <Button Content="Expand all"
+                                                    Command="{Binding ExpandAllLuaBlocksCommand}" />
+                                            <Button Content="Collapse all"
+                                                    Command="{Binding CollapseAllLuaBlocksCommand}" />
+                                            <Button Content="Save as..."
+                                                    Click="OnSaveLuaAsClick"
+                                                    IsEnabled="{Binding CanSaveSelectedLuaBlob}" />
+                                            <Button Content="Edit"
+                                                    Click="OnEditLuaClick"
+                                                    IsEnabled="{Binding CanSaveSelectedLuaBlob}" />
+                                            <CheckBox Content="Auto-wrap"
+                                                      IsChecked="{Binding AutoWrapContent}"
+                                                      Width="120" />
+                                        </WrapPanel>
+
+                                        <DataGrid x:Name="LuaBlocksGrid"
+                                                  Grid.Row="1"
+                                                  AutoGenerateColumns="False"
+                                                  HierarchicalRowsEnabled="True"
+                                                  HierarchicalModel="{Binding Dpuyaml6Model}"
+                                                  SelectedItem="{Binding SelectedDpuyaml6Node}"
+                                                  CanUserSortColumns="True"
+                                                  CanUserResizeColumns="True"
+                                                  GridLinesVisibility="Horizontal"
+                                                  UseLogicalScrollable="True">
+                                            <DataGrid.Columns>
+                                                <DataGridHierarchicalColumn Header="Node"
+                                                                            SortMemberPath="Item.NodeLabel"
+                                                                            Width="2*"
+                                                                            MinWidth="180"
+                                                                            x:CompileBindings="False">
+                                                    <DataGridHierarchicalColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.NodeLabel}" />
+                                                        </DataTemplate>
+                                                    </DataGridHierarchicalColumn.CellTemplate>
+                                                </DataGridHierarchicalColumn>
+                                                <DataGridTemplateColumn Header="ElementId"
+                                                                        SortMemberPath="Item.ElementId"
+                                                                        Width="120"
+                                                                        MinWidth="100"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ElementIdText}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Preview"
+                                                                        SortMemberPath="Item.ValuePreview"
+                                                                        Width="3*"
+                                                                        MinWidth="220"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ValuePreview}" TextWrapping="Wrap" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+
+                                        <TextBox Grid.Row="2"
+                                                 IsReadOnly="True"
+                                                 AcceptsReturn="True"
+                                                 TextWrapping="{Binding ContentTextWrapping}"
+                                                 FontFamily="Consolas"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 Text="{Binding SelectedDpuyaml6Content}" />
+                                    </Grid>
+                                </Border>
+                            </TabItem>
+
+                            <TabItem Header="HTML/RS">
+                                <Border Padding="10"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Margin="0,6,0,0">
+                                    <Grid RowDefinitions="Auto,3*,4*"
+                                          RowSpacing="8">
+                                        <WrapPanel Grid.Row="0"
+                                                   Orientation="Horizontal"
+                                                   ItemWidth="140"
+                                                   HorizontalAlignment="Left">
+                                            <Button Content="Expand all"
+                                                    Command="{Binding ExpandAllHtmlRsCommand}" />
+                                            <Button Content="Collapse all"
+                                                    Command="{Binding CollapseAllHtmlRsCommand}" />
+                                            <Button Content="Save as..."
+                                                    Click="OnSaveHtmlRsAsClick"
+                                                    IsEnabled="{Binding CanSaveSelectedHtmlRsBlob}" />
+                                            <CheckBox Content="Auto-wrap"
+                                                      IsChecked="{Binding AutoWrapContent}"
+                                                      Width="120" />
+                                        </WrapPanel>
+
+                                        <DataGrid x:Name="HtmlRsGrid"
+                                                  Grid.Row="1"
+                                                  AutoGenerateColumns="False"
+                                                  HierarchicalRowsEnabled="True"
+                                                  HierarchicalModel="{Binding Content2Model}"
+                                                  SelectedItem="{Binding SelectedContent2Node}"
+                                                  CanUserSortColumns="True"
+                                                  CanUserResizeColumns="True"
+                                                  GridLinesVisibility="Horizontal"
+                                                  UseLogicalScrollable="True">
+                                            <DataGrid.Columns>
+                                                <DataGridHierarchicalColumn Header="Node"
+                                                                            SortMemberPath="Item.NodeLabel"
+                                                                            Width="2*"
+                                                                            MinWidth="180"
+                                                                            x:CompileBindings="False">
+                                                    <DataGridHierarchicalColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.NodeLabel}" />
+                                                        </DataTemplate>
+                                                    </DataGridHierarchicalColumn.CellTemplate>
+                                                </DataGridHierarchicalColumn>
+                                                <DataGridTemplateColumn Header="ElementId"
+                                                                        SortMemberPath="Item.ElementId"
+                                                                        Width="120"
+                                                                        MinWidth="100"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ElementIdText}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Preview"
+                                                                        SortMemberPath="Item.ValuePreview"
+                                                                        Width="3*"
+                                                                        MinWidth="220"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ValuePreview}" TextWrapping="Wrap" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+
+                                        <TextBox Grid.Row="2"
+                                                 IsReadOnly="True"
+                                                 AcceptsReturn="True"
+                                                 TextWrapping="{Binding ContentTextWrapping}"
+                                                 FontFamily="Consolas"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 Text="{Binding SelectedContent2Content}" />
+                                    </Grid>
+                                </Border>
+                            </TabItem>
+
+                            <TabItem Header="Databank">
+                                <Border Padding="10"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Margin="0,6,0,0">
+                                    <Grid RowDefinitions="Auto,3*,4*"
+                                          RowSpacing="8">
+                                        <WrapPanel Grid.Row="0"
+                                                   Orientation="Horizontal"
+                                                   ItemWidth="140"
+                                                   HorizontalAlignment="Left">
+                                            <Button Content="Expand all"
+                                                    Command="{Binding ExpandAllDatabankCommand}" />
+                                            <Button Content="Collapse all"
+                                                    Command="{Binding CollapseAllDatabankCommand}" />
+                                            <Button Content="Save as..."
+                                                    Click="OnSaveDatabankAsClick"
+                                                    IsEnabled="{Binding CanSaveSelectedDatabankBlob}" />
+                                            <CheckBox Content="Auto-wrap"
+                                                      IsChecked="{Binding AutoWrapContent}"
+                                                      Width="120" />
+                                        </WrapPanel>
+
+                                        <DataGrid x:Name="DatabankGrid"
+                                                  Grid.Row="1"
+                                                  AutoGenerateColumns="False"
+                                                  HierarchicalRowsEnabled="True"
+                                                  HierarchicalModel="{Binding DatabankModel}"
+                                                  SelectedItem="{Binding SelectedDatabankNode}"
+                                                  CanUserSortColumns="True"
+                                                  CanUserResizeColumns="True"
+                                                  GridLinesVisibility="Horizontal"
+                                                  UseLogicalScrollable="True">
+                                            <DataGrid.Columns>
+                                                <DataGridHierarchicalColumn Header="Node"
+                                                                            SortMemberPath="Item.NodeLabel"
+                                                                            Width="2*"
+                                                                            MinWidth="180"
+                                                                            x:CompileBindings="False">
+                                                    <DataGridHierarchicalColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.NodeLabel}" />
+                                                        </DataTemplate>
+                                                    </DataGridHierarchicalColumn.CellTemplate>
+                                                </DataGridHierarchicalColumn>
+                                                <DataGridTemplateColumn Header="Kind"
+                                                                        SortMemberPath="Item.NodeKind"
+                                                                        Width="120"
+                                                                        MinWidth="90"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.NodeKind}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="ElementId"
+                                                                        SortMemberPath="Item.ElementId"
+                                                                        Width="120"
+                                                                        MinWidth="100"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ElementIdText}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTemplateColumn Header="Preview"
+                                                                        SortMemberPath="Item.ValuePreview"
+                                                                        Width="3*"
+                                                                        MinWidth="220"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ValuePreview}" TextWrapping="Wrap" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+
+                                        <TextBox Grid.Row="2"
+                                                 IsReadOnly="True"
+                                                 AcceptsReturn="True"
+                                                 TextWrapping="{Binding ContentTextWrapping}"
+                                                 FontFamily="Consolas"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 Text="{Binding SelectedDatabankContent}" />
+                                    </Grid>
+                                </Border>
+                            </TabItem>
+                        </TabControl>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Database">
+                    <Grid RowDefinitions="Auto,*"
+                          RowSpacing="10">
+                        <WrapPanel Grid.Row="0"
+                                   Orientation="Horizontal"
+                                   ItemWidth="380"
+                                   ItemHeight="84">
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="DB Host" />
+                                    <TextBox Text="{Binding DbHostInput}"
+                                             Width="200"
+                                             MaxWidth="200"
+                                             HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="DB Port" />
+                                    <TextBox Text="{Binding DbPortInput}"
+                                             Width="200"
+                                             MaxWidth="200"
+                                             HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="DB Name" />
+                                    <TextBox Text="{Binding DbNameInput}"
+                                             Width="200"
+                                             MaxWidth="200"
+                                             HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="DB User" />
+                                    <TextBox Text="{Binding DbUserInput}"
+                                             Width="200"
+                                             MaxWidth="200"
+                                             HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="DB Password" />
+                                    <TextBox Text="{Binding DbPasswordInput}"
+                                             PasswordChar="*"
+                                             Width="200"
+                                             MaxWidth="200"
+                                             HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="Property Limit / Element" />
+                                    <TextBox Text="{Binding PropertyLimitInput}"
+                                             Width="200"
+                                             MaxWidth="200"
+                                             HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="Server Root Path" />
+                                    <TextBox Text="{Binding ServerRootPathInput}"
+                                             Width="360"
+                                             MaxWidth="360"
+                                             HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+                        </WrapPanel>
+
+                        <TabControl Grid.Row="1">
+                            <TabItem Header="Database Summary">
+                                <Border Padding="10"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Margin="0,6,0,0">
+                                    <TextBox IsReadOnly="True"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             HorizontalAlignment="Stretch"
+                                             VerticalAlignment="Stretch"
+                                             Text="{Binding DatabaseSummary}" />
+                                </Border>
+                            </TabItem>
+
+                            <TabItem Header="Endpoint">
+                                <Border Padding="10"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Margin="0,6,0,0">
+                                    <Grid RowDefinitions="Auto,Auto,2*,3*"
+                                          RowSpacing="8">
+                                        <Grid Grid.Row="0"
+                                              ColumnDefinitions="Auto,*"
+                                              ColumnSpacing="8">
+                                            <TextBlock Grid.Column="0"
+                                                       VerticalAlignment="Center"
+                                                       Text="Endpoint Template" />
+                                            <TextBox Grid.Column="1"
+                                                     Text="{Binding EndpointTemplateInput}" />
+                                        </Grid>
+
+                                        <WrapPanel Grid.Row="1"
+                                                   ItemWidth="200"
+                                                   HorizontalAlignment="Left">
+                                            <Button Content="Probe Endpoint Binary"
+                                                    Command="{Binding ProbeEndpointCommand}" />
+                                        </WrapPanel>
+
+                                        <Grid Grid.Row="2"
+                                              RowDefinitions="Auto,*"
+                                              RowSpacing="6">
+                                            <TextBlock Grid.Row="0"
+                                                       FontWeight="SemiBold"
+                                                       Text="Endpoint Summary" />
+                                            <TextBox Grid.Row="1"
+                                                     IsReadOnly="True"
+                                                     AcceptsReturn="True"
+                                                     TextWrapping="Wrap"
+                                                     HorizontalAlignment="Stretch"
+                                                     VerticalAlignment="Stretch"
+                                                     Text="{Binding EndpointSummary}" />
+                                        </Grid>
+
+                                        <Grid Grid.Row="3"
+                                              RowDefinitions="Auto,*"
+                                              RowSpacing="6">
+                                            <TextBlock Grid.Row="0"
+                                                       FontWeight="SemiBold"
+                                                       Text="Endpoint Raw Preview" />
+                                            <TextBox Grid.Row="1"
+                                                     IsReadOnly="True"
+                                                     AcceptsReturn="True"
+                                                     TextWrapping="Wrap"
+                                                     HorizontalAlignment="Stretch"
+                                                     VerticalAlignment="Stretch"
+                                                     Text="{Binding EndpointRawPreview}" />
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+                            </TabItem>
+                        </TabControl>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Config">
+                    <Border BorderThickness="1"
+                            BorderBrush="#505050"
+                            CornerRadius="4"
+                            Padding="8">
+                        <Grid RowDefinitions="Auto,Auto,Auto,Auto,*"
+                              RowSpacing="8">
+                            <CheckBox Grid.Row="0"
+                                      Content="Auto-load on startup"
+                                      IsChecked="{Binding AutoLoadOnStartup}" />
+
+                            <CheckBox Grid.Row="1"
+                                      Content="Auto-wrap content panes"
+                                      IsChecked="{Binding AutoWrapContent}" />
+
+                            <CheckBox Grid.Row="2"
+                                      Content="Auto-collapse to 1st level"
+                                      IsChecked="{Binding AutoCollapseToFirstLevel}" />
+
+                            <CheckBox Grid.Row="3"
+                                      Content="LUA versioning backups"
+                                      IsChecked="{Binding LuaVersioningEnabled}" />
+
+                            <DataGrid Grid.Row="4"
+                                      x:Name="ConfigPropertiesGrid"
+                                      AutoGenerateColumns="False"
+                                      CanUserSortColumns="True"
+                                      CanUserResizeColumns="True"
+                                      GridLinesVisibility="Horizontal"
+                                      UseLogicalScrollable="True"
+                                      ItemsSource="{Binding ElementPropertyFilters}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Property"
+                                                        Binding="{Binding PropertyName}"
+                                                        Width="*"
+                                                        MinWidth="180" />
+                                    <DataGridCheckBoxColumn Header="Active"
+                                                            Binding="{Binding IsActive, Mode=TwoWay}"
+                                                            Width="120"
+                                                            MinWidth="90" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </Border>
+                </TabItem>
+            </TabControl>
+        </Border>
+
+        <Border x:Name="LuaEditorPageRoot"
+                Grid.Row="1"
+                Padding="10"
+                BorderThickness="1"
+                CornerRadius="6"
+                IsVisible="False">
+            <Grid RowDefinitions="Auto,Auto,*,Auto"
+                  RowSpacing="8">
+                <StackPanel Grid.Row="0"
+                            Orientation="Horizontal"
+                            Spacing="10">
+                    <Button Content="&lt;&lt; Back"
+                            Click="OnLuaEditorBackClick" />
+                    <TextBlock x:Name="LuaEditorHeaderText"
+                               VerticalAlignment="Center"
+                               FontWeight="SemiBold"
+                               Text="LUA Editor" />
+                </StackPanel>
+
+                <WrapPanel Grid.Row="1"
+                           Orientation="Horizontal"
+                           HorizontalAlignment="Left"
+                           ItemWidth="92">
+                    <Button Content="New"
+                            Click="OnLuaEditorNewClick" />
+                    <Button Content="Open..."
+                            Click="OnLuaEditorOpenClick" />
+                    <Button x:Name="LuaEditorSaveButton"
+                            Content="Save"
+                            Click="OnLuaEditorSaveClick" />
+                    <Button Content="Save as..."
+                            Click="OnLuaEditorSaveAsClick" />
+                    <Button x:Name="LuaEditorSaveToDbButton"
+                            Content="Save to DB"
+                            Click="OnLuaEditorSaveToDbClick" />
+                    <Button Content="Backups..."
+                            Click="OnLuaEditorBackupsClick" />
+                    <Button Content="Undo"
+                            Click="OnLuaEditorUndoClick" />
+                    <Button Content="Redo"
+                            Click="OnLuaEditorRedoClick" />
+                    <Button Content="Cut"
+                            Click="OnLuaEditorCutClick" />
+                    <Button Content="Copy"
+                            Click="OnLuaEditorCopyClick" />
+                    <Button Content="Paste"
+                            Click="OnLuaEditorPasteClick" />
+                    <ToggleButton x:Name="LuaEditorWordWrapToggle"
+                                  Content="Wrap"
+                                  IsChecked="False"
+                                  Checked="OnLuaEditorWordWrapChanged"
+                                  Unchecked="OnLuaEditorWordWrapChanged" />
+                </WrapPanel>
+
+                <ae:TextEditor Grid.Row="2"
+                               x:Name="LuaSourceEditor"
+                               FontFamily="Consolas, Courier New, monospace"
+                               FontSize="16"
+                               ShowLineNumbers="True"
+                               WordWrap="False"
+                               HorizontalScrollBarVisibility="Auto"
+                               VerticalScrollBarVisibility="Auto" />
+
+                <TextBlock Grid.Row="3"
+                           x:Name="LuaEditorStatusText"
+                           Text="Ln 1, Col 1" />
+            </Grid>
+        </Border>
+
+    </Grid>
+</Window>
