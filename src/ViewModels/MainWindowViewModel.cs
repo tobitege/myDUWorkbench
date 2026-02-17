@@ -1,5 +1,6 @@
 // Helper Index:
 // - LoadDatabaseAsync: Loads DB construct snapshot, categorizes properties, and refreshes tree models.
+// - ImportBlueprintJsonAsync: Imports blueprint JSON and projects it into grid/property models.
 // - ProbeEndpointAsync: Probes endpoint payloads and updates decoded transport summaries.
 // - BuildGetConstructDataExportJson: Produces export JSON merging endpoint data with DB fallback values.
 // - QueueConstructNameSearch: Debounces construct-name search and schedules async suggestion refresh.
@@ -38,6 +39,10 @@ public partial class MainWindowViewModel : ViewModelBase
         string NodeLabel,
         string PropertyName,
         string SuggestedFileName);
+    private sealed record ElementFilterSnapshot(
+        string ElementTypeFilterInput,
+        bool DamagedOnly,
+        Dictionary<string, bool> PropertyStates);
 
     private readonly MyDuDataService _dataService = new();
     private readonly WorkbenchSettingsService _settingsService = new();
@@ -322,92 +327,63 @@ public partial class MainWindowViewModel : ViewModelBase
                 ? snapshot.ConstructId.ToString(CultureInfo.InvariantCulture)
                 : snapshot.ConstructName;
             UpdateDatabaseSummary(snapshot);
-
-            List<ElementPropertyRecord> regularProperties = new();
-            List<ElementPropertyRecord> dpuyamlProperties = new();
-            List<ElementPropertyRecord> content2Properties = new();
-            List<ElementPropertyRecord> databankProperties = new();
-
-            foreach (ElementPropertyRecord record in snapshot.Properties)
-            {
-                if (string.Equals(record.Name, "dpuyaml_6", StringComparison.OrdinalIgnoreCase))
-                {
-                    dpuyamlProperties.Add(record);
-                }
-                else if (string.Equals(record.Name, "content_2", StringComparison.OrdinalIgnoreCase))
-                {
-                    content2Properties.Add(record);
-                }
-                else if (string.Equals(record.Name, "databank", StringComparison.OrdinalIgnoreCase))
-                {
-                    databankProperties.Add(record);
-                }
-                else
-                {
-                    regularProperties.Add(record);
-                }
-            }
-
-            _allRegularProperties.Clear();
-            _allRegularProperties.AddRange(regularProperties);
-            RebuildPropertyFilterRows(regularProperties);
-            ApplyElementPropertyFilter();
-
-            Dpuyaml6Properties.Clear();
-            foreach (ElementPropertyRecord record in dpuyamlProperties)
-            {
-                Dpuyaml6Properties.Add(record);
-            }
-
-            Content2Properties.Clear();
-            foreach (ElementPropertyRecord record in content2Properties)
-            {
-                Content2Properties.Add(record);
-            }
-
-            DatabankProperties.Clear();
-            foreach (ElementPropertyRecord record in databankProperties)
-            {
-                DatabankProperties.Add(record);
-            }
-
-            RebuildCodeBlockTree(Dpuyaml6Model, dpuyamlProperties, BuildLuaPartRows, "LUA blocks");
-            RebuildCodeBlockTree(Content2Model, content2Properties, BuildContentPartRows, "HTML/RS");
-            RebuildCodeBlockTree(DatabankModel, databankProperties, BuildDatabankPartRows, "Databank");
-
-            if (AutoCollapseToFirstLevel)
-            {
-                ElementPropertiesModel.CollapseAll(minDepth: 0);
-                Dpuyaml6Model.CollapseAll(minDepth: 1);
-                Content2Model.CollapseAll(minDepth: 1);
-                DatabankModel.CollapseAll(minDepth: 1);
-            }
-
-            SelectedElementPropertyNode = FindNodeBySelectionKey(ElementPropertiesModel, _selectedElementNodeKey);
-            SelectedDpuyaml6Node = FindNodeBySelectionKey(Dpuyaml6Model, _selectedDpuyamlNodeKey);
-            SelectedContent2Node = FindNodeBySelectionKey(Content2Model, _selectedContent2NodeKey);
-            SelectedDatabankNode = FindNodeBySelectionKey(DatabankModel, _selectedDatabankNodeKey);
-
-            if (SelectedDpuyaml6Node is null)
-            {
-                SelectedDpuyaml6Content = string.Empty;
-            }
-
-            if (SelectedContent2Node is null)
-            {
-                SelectedContent2Content = string.Empty;
-            }
-
-            if (SelectedDatabankNode is null)
-            {
-                SelectedDatabankContent = string.Empty;
-            }
+            ApplyLoadedPropertyCollections(snapshot.Properties);
 
             StatusMessage = $"DB snapshot loaded for construct {snapshot.ConstructId}.";
         }
         catch (Exception ex)
         {
             StatusMessage = $"DB load failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    public async Task ImportBlueprintJsonAsync(string jsonContent, string sourceName, CancellationToken cancellationToken = default)
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        ElementFilterSnapshot filterSnapshot = CaptureElementFilterSnapshot();
+
+        try
+        {
+            IsBusy = true;
+            StatusMessage = "Importing blueprint JSON...";
+
+            ClearFiltersForBlueprintImport();
+
+            BlueprintImportResult importResult = await Task.Run(
+                () => _dataService.ParseBlueprintJson(jsonContent, sourceName),
+                cancellationToken);
+
+            _lastSnapshot = null;
+            OnPropertyChanged(nameof(CanRepairDestroyedElements));
+
+            ActiveConstructName = string.IsNullOrWhiteSpace(importResult.BlueprintName)
+                ? "Blueprint import"
+                : importResult.BlueprintName;
+
+            ApplyLoadedPropertyCollections(importResult.Properties);
+            RestoreElementFilters(filterSnapshot);
+            UpdateBlueprintSummary(importResult);
+
+            string blueprintIdText = importResult.BlueprintId?.ToString(CultureInfo.InvariantCulture) ?? "<none>";
+            StatusMessage =
+                $"Blueprint imported: {importResult.ElementCount.ToString(CultureInfo.InvariantCulture)} elements, id={blueprintIdText}.";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Blueprint import cancelled.";
+        }
+        catch (Exception ex)
+        {
+            RestoreElementFilters(filterSnapshot);
+            StatusMessage = $"Blueprint import failed: {ex.Message}";
         }
         finally
         {
@@ -1385,6 +1361,76 @@ public partial class MainWindowViewModel : ViewModelBase
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
+    private ElementFilterSnapshot CaptureElementFilterSnapshot()
+    {
+        var propertyStates = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (PropertyFilterRecord row in ElementPropertyFilters)
+        {
+            string propertyName = NormalizePropertyName(row.PropertyName);
+            if (string.IsNullOrWhiteSpace(propertyName))
+            {
+                continue;
+            }
+
+            propertyStates[propertyName] = row.IsActive;
+        }
+
+        return new ElementFilterSnapshot(
+            ElementTypeNameFilterInput ?? string.Empty,
+            DamagedOnly,
+            propertyStates);
+    }
+
+    private void ClearFiltersForBlueprintImport()
+    {
+        ElementTypeNameFilterInput = string.Empty;
+        SelectedElementTypeFilterHistoryItem = null;
+        DamagedOnly = false;
+
+        _isBulkUpdatingElementPropertyFilters = true;
+        try
+        {
+            foreach (PropertyFilterRecord row in ElementPropertyFilters)
+            {
+                row.IsActive = true;
+            }
+        }
+        finally
+        {
+            _isBulkUpdatingElementPropertyFilters = false;
+        }
+
+        ApplyElementPropertyFilter();
+    }
+
+    private void RestoreElementFilters(ElementFilterSnapshot snapshot)
+    {
+        ElementTypeNameFilterInput = snapshot.ElementTypeFilterInput;
+        DamagedOnly = snapshot.DamagedOnly;
+
+        _isBulkUpdatingElementPropertyFilters = true;
+        try
+        {
+            foreach (PropertyFilterRecord row in ElementPropertyFilters)
+            {
+                string propertyName = NormalizePropertyName(row.PropertyName);
+                if (string.IsNullOrWhiteSpace(propertyName))
+                {
+                    continue;
+                }
+
+                row.IsActive = !snapshot.PropertyStates.TryGetValue(propertyName, out bool wasActive) || wasActive;
+                _elementPropertyActiveStates[propertyName] = row.IsActive;
+            }
+        }
+        finally
+        {
+            _isBulkUpdatingElementPropertyFilters = false;
+        }
+
+        ApplyElementPropertyFilter();
+    }
+
     private void AddElementTypeFilterHistory(string? filterText)
     {
         string normalized = filterText?.Trim() ?? string.Empty;
@@ -1628,6 +1674,89 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         return elementDisplayName[..bracketStart];
+    }
+
+    private void ApplyLoadedPropertyCollections(IReadOnlyList<ElementPropertyRecord> records)
+    {
+        List<ElementPropertyRecord> regularProperties = new();
+        List<ElementPropertyRecord> dpuyamlProperties = new();
+        List<ElementPropertyRecord> content2Properties = new();
+        List<ElementPropertyRecord> databankProperties = new();
+
+        foreach (ElementPropertyRecord record in records)
+        {
+            if (string.Equals(record.Name, "dpuyaml_6", StringComparison.OrdinalIgnoreCase))
+            {
+                dpuyamlProperties.Add(record);
+            }
+            else if (string.Equals(record.Name, "content_2", StringComparison.OrdinalIgnoreCase))
+            {
+                content2Properties.Add(record);
+            }
+            else if (string.Equals(record.Name, "databank", StringComparison.OrdinalIgnoreCase))
+            {
+                databankProperties.Add(record);
+            }
+            else
+            {
+                regularProperties.Add(record);
+            }
+        }
+
+        _allRegularProperties.Clear();
+        _allRegularProperties.AddRange(regularProperties);
+        RebuildPropertyFilterRows(regularProperties);
+        ApplyElementPropertyFilter();
+
+        Dpuyaml6Properties.Clear();
+        foreach (ElementPropertyRecord record in dpuyamlProperties)
+        {
+            Dpuyaml6Properties.Add(record);
+        }
+
+        Content2Properties.Clear();
+        foreach (ElementPropertyRecord record in content2Properties)
+        {
+            Content2Properties.Add(record);
+        }
+
+        DatabankProperties.Clear();
+        foreach (ElementPropertyRecord record in databankProperties)
+        {
+            DatabankProperties.Add(record);
+        }
+
+        RebuildCodeBlockTree(Dpuyaml6Model, dpuyamlProperties, BuildLuaPartRows, "LUA blocks");
+        RebuildCodeBlockTree(Content2Model, content2Properties, BuildContentPartRows, "HTML/RS");
+        RebuildCodeBlockTree(DatabankModel, databankProperties, BuildDatabankPartRows, "Databank");
+
+        if (AutoCollapseToFirstLevel)
+        {
+            ElementPropertiesModel.CollapseAll(minDepth: 0);
+            Dpuyaml6Model.CollapseAll(minDepth: 1);
+            Content2Model.CollapseAll(minDepth: 1);
+            DatabankModel.CollapseAll(minDepth: 1);
+        }
+
+        SelectedElementPropertyNode = FindNodeBySelectionKey(ElementPropertiesModel, _selectedElementNodeKey);
+        SelectedDpuyaml6Node = FindNodeBySelectionKey(Dpuyaml6Model, _selectedDpuyamlNodeKey);
+        SelectedContent2Node = FindNodeBySelectionKey(Content2Model, _selectedContent2NodeKey);
+        SelectedDatabankNode = FindNodeBySelectionKey(DatabankModel, _selectedDatabankNodeKey);
+
+        if (SelectedDpuyaml6Node is null)
+        {
+            SelectedDpuyaml6Content = string.Empty;
+        }
+
+        if (SelectedContent2Node is null)
+        {
+            SelectedContent2Content = string.Empty;
+        }
+
+        if (SelectedDatabankNode is null)
+        {
+            SelectedDatabankContent = string.Empty;
+        }
     }
 
     private static void RebuildCodeBlockTree(
@@ -2941,6 +3070,19 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         sb.AppendLine($"Element properties loaded: {snapshot.Properties.Count}");
+        DatabaseSummary = sb.ToString();
+    }
+
+    private void UpdateBlueprintSummary(BlueprintImportResult importResult)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Blueprint import (local file)");
+        sb.AppendLine($"Source: {importResult.SourceName}");
+        sb.AppendLine($"Name: {importResult.BlueprintName}");
+        sb.AppendLine(
+            $"BlueprintId: {importResult.BlueprintId?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}");
+        sb.AppendLine($"Elements: {importResult.ElementCount.ToString(CultureInfo.InvariantCulture)}");
+        sb.AppendLine($"Properties loaded: {importResult.Properties.Count.ToString(CultureInfo.InvariantCulture)}");
         DatabaseSummary = sb.ToString();
     }
 

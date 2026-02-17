@@ -138,6 +138,13 @@ public sealed record DatabaseConstructSnapshot(
     Vec3? ResumeAngularVelocity,
     IReadOnlyList<ElementPropertyRecord> Properties);
 
+public sealed record BlueprintImportResult(
+    string SourceName,
+    string BlueprintName,
+    ulong? BlueprintId,
+    int ElementCount,
+    IReadOnlyList<ElementPropertyRecord> Properties);
+
 public sealed record EndpointProbeResult(
     Uri Url,
     int StatusCode,

@@ -2,6 +2,7 @@
 // - LoadConstructSnapshotAsync: Loads construct metadata, transforms, and decoded element properties from PostgreSQL.
 // - GetUserConstructsAsync: Lists user-owned constructs by core type (dynamic/static/space) with configurable sorting.
 // - SearchConstructsByNameAsync: Returns construct id/name suggestions via ILIKE matching.
+// - ParseBlueprintJson: Flattens blueprint JSON into grid-friendly element property records.
 // - ProbeEndpointAsync: Probes construct endpoint payloads and attempts JSON/binary decoding.
 using myDUWorker.Models;
 using Npgsql;
@@ -11,6 +12,7 @@ using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -632,6 +634,107 @@ public sealed class MyDuDataService
         }
     }
 
+    public BlueprintImportResult ParseBlueprintJson(string jsonContent, string sourceName)
+    {
+        if (string.IsNullOrWhiteSpace(jsonContent))
+        {
+            throw new ArgumentException("Blueprint JSON content is empty.", nameof(jsonContent));
+        }
+
+        using JsonDocument document = JsonDocument.Parse(
+            jsonContent,
+            new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+
+        JsonElement root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException("Blueprint root must be a JSON object.");
+        }
+
+        JsonElement model = default;
+        bool hasModel = root.TryGetProperty("Model", out model) && model.ValueKind == JsonValueKind.Object;
+        JsonElement elements = default;
+        bool hasElements = root.TryGetProperty("Elements", out elements) && elements.ValueKind == JsonValueKind.Array;
+
+        ulong? blueprintId = hasModel ? TryReadUInt64(model, "Id") : null;
+        string blueprintName = hasModel ? TryReadString(model, "Name") ?? string.Empty : string.Empty;
+        if (string.IsNullOrWhiteSpace(blueprintName))
+        {
+            blueprintName = string.IsNullOrWhiteSpace(sourceName) ? "Blueprint import" : sourceName;
+        }
+
+        var records = new List<ElementPropertyRecord>();
+        int elementCount = 0;
+
+        if (hasElements)
+        {
+            int fallbackElementId = 0;
+            foreach (JsonElement element in elements.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                fallbackElementId++;
+                ulong elementId = TryReadUInt64(element, "elementId") ?? (ulong)fallbackElementId;
+                string elementDisplayName = BuildBlueprintElementDisplayName(element, elementId);
+
+                foreach (JsonProperty property in element.EnumerateObject())
+                {
+                    AddBlueprintPropertyRecord(records, elementId, elementDisplayName, property.Name, property.Value);
+                }
+
+                elementCount++;
+            }
+        }
+
+        const ulong modelPseudoElementId = 0UL;
+        if (hasModel)
+        {
+            foreach (JsonProperty property in model.EnumerateObject())
+            {
+                AddBlueprintPropertyRecord(
+                    records,
+                    modelPseudoElementId,
+                    "BlueprintModel [0]",
+                    $"model.{property.Name}",
+                    property.Value);
+            }
+        }
+
+        foreach (JsonProperty property in root.EnumerateObject())
+        {
+            if (property.NameEquals("Elements") || property.NameEquals("Model"))
+            {
+                continue;
+            }
+
+            AddBlueprintPropertyRecord(
+                records,
+                modelPseudoElementId,
+                "BlueprintRoot [0]",
+                $"root.{property.Name}",
+                property.Value);
+        }
+
+        if (records.Count == 0)
+        {
+            throw new InvalidOperationException("No readable element or model properties were found in blueprint JSON.");
+        }
+
+        return new BlueprintImportResult(
+            sourceName ?? string.Empty,
+            blueprintName,
+            blueprintId,
+            elementCount,
+            records);
+    }
+
     public async Task<EndpointProbeResult> ProbeEndpointAsync(
         Uri endpointUri,
         CancellationToken cancellationToken)
@@ -1156,5 +1259,185 @@ public sealed class MyDuDataService
     {
         object value = reader.GetValue(ordinal);
         return Convert.ToSingle(value, CultureInfo.InvariantCulture);
+    }
+
+    private static string BuildBlueprintElementDisplayName(JsonElement element, ulong elementId)
+    {
+        ulong? localId = TryReadUInt64(element, "localId");
+        ulong displayId = localId ?? elementId;
+
+        string typeLabel = "BlueprintElement";
+        if (element.TryGetProperty("elementType", out JsonElement elementType))
+        {
+            string token = BuildScalarToken(elementType);
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                typeLabel = $"type_{token}";
+            }
+        }
+
+        return $"{typeLabel} [{displayId.ToString(CultureInfo.InvariantCulture)}]";
+    }
+
+    private static void AddBlueprintPropertyRecord(
+        ICollection<ElementPropertyRecord> records,
+        ulong elementId,
+        string elementDisplayName,
+        string propertyName,
+        JsonElement value)
+    {
+        string decodedValue = RenderBlueprintJsonValue(value);
+        int propertyType = InferBlueprintPropertyType(value);
+        int byteLength = Encoding.UTF8.GetByteCount(decodedValue);
+
+        records.Add(new ElementPropertyRecord(
+            elementId,
+            elementDisplayName,
+            propertyName,
+            propertyType,
+            decodedValue,
+            byteLength));
+    }
+
+    private static int InferBlueprintPropertyType(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.True or JsonValueKind.False => 1,
+            JsonValueKind.Number when value.TryGetInt64(out _) => 2,
+            JsonValueKind.Number => 3,
+            _ => 4
+        };
+    }
+
+    private static string RenderBlueprintJsonValue(JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Null:
+            case JsonValueKind.Undefined:
+                return string.Empty;
+            case JsonValueKind.True:
+                return "true";
+            case JsonValueKind.False:
+                return "false";
+            case JsonValueKind.Number:
+                if (value.TryGetInt64(out long longValue))
+                {
+                    return longValue.ToString(CultureInfo.InvariantCulture);
+                }
+
+                if (value.TryGetDouble(out double doubleValue))
+                {
+                    return doubleValue.ToString("R", CultureInfo.InvariantCulture);
+                }
+
+                return value.GetRawText();
+            case JsonValueKind.String:
+                return value.GetString() ?? string.Empty;
+            case JsonValueKind.Array:
+                return RenderBlueprintArrayValue(value);
+            case JsonValueKind.Object:
+                return RenderBlueprintObjectValue(value);
+            default:
+                return value.GetRawText();
+        }
+    }
+
+    private static string RenderBlueprintArrayValue(JsonElement value)
+    {
+        int length = value.GetArrayLength();
+        if (length == 0)
+        {
+            return "[]";
+        }
+
+        if (length <= 8)
+        {
+            string serialized = JsonSerializer.Serialize(value);
+            if (serialized.Length <= 1024)
+            {
+                return serialized;
+            }
+        }
+
+        return $"array(length={length.ToString(CultureInfo.InvariantCulture)})";
+    }
+
+    private static string RenderBlueprintObjectValue(JsonElement value)
+    {
+        string serialized = JsonSerializer.Serialize(value);
+        if (serialized.Length <= 2048)
+        {
+            return serialized;
+        }
+
+        string[] keys = value.EnumerateObject()
+            .Select(property => property.Name)
+            .Take(8)
+            .ToArray();
+        int keyCount = value.EnumerateObject().Count();
+
+        string keyPreview = string.Join(", ", keys);
+        string suffix = keyCount > keys.Length ? ", ..." : string.Empty;
+        return $"object(keys={keyPreview}{suffix}; count={keyCount.ToString(CultureInfo.InvariantCulture)})";
+    }
+
+    private static ulong? TryReadUInt64(JsonElement jsonObject, string propertyName)
+    {
+        if (jsonObject.ValueKind != JsonValueKind.Object ||
+            !jsonObject.TryGetProperty(propertyName, out JsonElement value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetUInt64(out ulong numeric))
+        {
+            return numeric;
+        }
+
+        if (value.ValueKind == JsonValueKind.String &&
+            ulong.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static string? TryReadString(JsonElement jsonObject, string propertyName)
+    {
+        if (jsonObject.ValueKind != JsonValueKind.Object ||
+            !jsonObject.TryGetProperty(propertyName, out JsonElement value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => value.GetRawText(),
+            _ => null
+        };
+    }
+
+    private static string BuildScalarToken(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Number)
+        {
+            return value.GetRawText();
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            return value.GetString() ?? string.Empty;
+        }
+
+        if (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False)
+        {
+            return value.GetRawText();
+        }
+
+        return string.Empty;
     }
 }

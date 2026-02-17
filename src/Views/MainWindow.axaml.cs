@@ -168,6 +168,75 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnImportBlueprintClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        try
+        {
+            var options = new FilePickerOpenOptions
+            {
+                Title = "Import Blueprint JSON",
+                AllowMultiple = false,
+                FileTypeFilter = new[]
+                {
+                    new FilePickerFileType("JSON files")
+                    {
+                        Patterns = new[] {"*.json"}
+                    },
+                    new FilePickerFileType("All files")
+                    {
+                        Patterns = new[] {"*.*"}
+                    }
+                }
+            };
+
+            if (!string.IsNullOrWhiteSpace(vm.LastSavedFolder))
+            {
+                Uri? folderUri = TryBuildFolderUri(vm.LastSavedFolder);
+                if (folderUri is not null)
+                {
+                    IStorageFolder? folder = await StorageProvider.TryGetFolderFromPathAsync(folderUri);
+                    if (folder is not null)
+                    {
+                        options.SuggestedStartLocation = folder;
+                    }
+                }
+            }
+
+            IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(options);
+            if (files.Count == 0)
+            {
+                return;
+            }
+
+            IStorageFile selected = files[0];
+            await using Stream readStream = await selected.OpenReadAsync();
+            using var reader = new StreamReader(readStream, Encoding.UTF8, true);
+            string json = await reader.ReadToEndAsync();
+
+            string sourcePath = ResolveStorageFilePath(selected);
+            UpdateLastUsedFolder(vm, sourcePath);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            await vm.ImportBlueprintJsonAsync(json, sourcePath, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            vm.StatusMessage = "Blueprint import cancelled.";
+        }
+        catch (Exception ex)
+        {
+            vm.StatusMessage = $"Blueprint import failed: {ex.Message}";
+        }
+    }
+
     private async void OnSaveLuaAsClick(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel vm ||

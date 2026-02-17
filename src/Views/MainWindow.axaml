@@ -133,6 +133,8 @@
                                    HorizontalAlignment="Left">
                             <Button Content="Load DB Snapshot"
                                     Command="{Binding LoadDatabaseCommand}" />
+                            <Button Content="Import Blueprint"
+                                    Click="OnImportBlueprintClick" />
                         </WrapPanel>
 
                         <TabControl Grid.Row="2" Padding="0">
