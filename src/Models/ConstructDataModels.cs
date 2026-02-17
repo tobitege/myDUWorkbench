@@ -143,7 +143,16 @@ public sealed record BlueprintImportResult(
     string BlueprintName,
     ulong? BlueprintId,
     int ElementCount,
-    IReadOnlyList<ElementPropertyRecord> Properties);
+    IReadOnlyList<ElementPropertyRecord> Properties,
+    string ImportPipeline,
+    string ImportNotes);
+
+public sealed record BlueprintGameDatabaseImportResult(
+    Uri Endpoint,
+    int StatusCode,
+    ulong? BlueprintId,
+    string ResponseText,
+    string RequestNotes);
 
 public sealed record EndpointProbeResult(
     Uri Url,

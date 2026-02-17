@@ -15,11 +15,14 @@ public sealed class WorkbenchSettings
     public string EndpointTemplateInput { get; set; } = string.Empty;
     public string DbHostInput { get; set; } = string.Empty;
     public string ServerRootPathInput { get; set; } = string.Empty;
+    public string NqUtilsDllPathInput { get; set; } = string.Empty;
+    public string BlueprintImportEndpointInput { get; set; } = string.Empty;
     public string DbPortInput { get; set; } = string.Empty;
     public string DbNameInput { get; set; } = string.Empty;
     public string DbUserInput { get; set; } = string.Empty;
     public string DbPassword { get; set; } = string.Empty;
     public string PropertyLimitInput { get; set; } = string.Empty;
+    public bool BlueprintImportAppendDateIfExists { get; set; }
     public string ElementTypeNameFilterInput { get; set; } = string.Empty;
     public List<string> ElementTypeFilterHistory { get; set; } = new();
     public bool AutoLoadOnStartup { get; set; } = true;
@@ -51,11 +54,14 @@ public sealed class PersistedWorkbenchSettings
     public string EndpointTemplateInput { get; set; } = string.Empty;
     public string DbHostInput { get; set; } = string.Empty;
     public string ServerRootPathInput { get; set; } = string.Empty;
+    public string NqUtilsDllPathInput { get; set; } = string.Empty;
+    public string BlueprintImportEndpointInput { get; set; } = string.Empty;
     public string DbPortInput { get; set; } = string.Empty;
     public string DbNameInput { get; set; } = string.Empty;
     public string DbUserInput { get; set; } = string.Empty;
     public string EncryptedDbPassword { get; set; } = string.Empty;
     public string PropertyLimitInput { get; set; } = string.Empty;
+    public bool BlueprintImportAppendDateIfExists { get; set; }
     public string ElementTypeNameFilterInput { get; set; } = string.Empty;
     public List<string> ElementTypeFilterHistory { get; set; } = new();
     public bool AutoLoadOnStartup { get; set; } = true;

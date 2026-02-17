@@ -3,24 +3,60 @@
         x:Class="myDUWorker.Views.ConfirmationDialog"
         Width="560"
         MinWidth="520"
-        Height="210"
-        MinHeight="190"
+        Height="340"
+        MinHeight="280"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
     <Grid Margin="14"
-          RowDefinitions="Auto,*,Auto"
+          RowDefinitions="Auto,Auto,Auto,Auto,*,Auto"
           RowSpacing="10">
         <TextBlock Grid.Row="0"
-                   x:Name="TitleText"
-                   FontWeight="SemiBold"
-                   Text="Confirm action" />
-
-        <TextBlock Grid.Row="1"
                    x:Name="PromptText"
+                   FontWeight="SemiBold"
                    TextWrapping="Wrap"
                    Text="Are you sure?" />
 
-        <StackPanel Grid.Row="2"
+        <TextBlock Grid.Row="1"
+                   x:Name="DetailsText"
+                   IsVisible="False"
+                   TextWrapping="Wrap"
+                   Text="" />
+
+        <Border Grid.Row="2"
+                x:Name="HintBorder"
+                BorderThickness="1"
+                BorderBrush="#505050"
+                CornerRadius="4"
+                Padding="8"
+                IsVisible="False">
+            <TextBlock x:Name="HintText"
+                       TextWrapping="Wrap"
+                       Text="" />
+        </Border>
+
+        <StackPanel Grid.Row="3"
+                    x:Name="OptionsPanel"
+                    IsVisible="False"
+                    Spacing="6">
+            <CheckBox x:Name="Option1CheckBox"
+                      IsVisible="False"
+                      Content=""
+                      VerticalAlignment="Top" />
+            <CheckBox x:Name="Option2CheckBox"
+                      IsVisible="False"
+                      Content=""
+                      VerticalAlignment="Top" />
+            <CheckBox x:Name="Option3CheckBox"
+                      IsVisible="False"
+                      Content=""
+                      VerticalAlignment="Top" />
+            <CheckBox x:Name="Option4CheckBox"
+                      IsVisible="False"
+                      Content=""
+                      VerticalAlignment="Top" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="5"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Spacing="8">

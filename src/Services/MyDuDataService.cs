@@ -5,14 +5,21 @@
 // - ParseBlueprintJson: Flattens blueprint JSON into grid-friendly element property records.
 // - ProbeEndpointAsync: Probes construct endpoint payloads and attempts JSON/binary decoding.
 using myDUWorker.Models;
+using Newtonsoft.Json;
 using Npgsql;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -20,7 +27,17 @@ namespace myDUWorker.Services;
 
 public sealed class MyDuDataService
 {
+    private const long MaxBytesForInMemoryNqPreflight = 30L * 1024L * 1024L;
+    private const long EstimatedDefaultJsonRequestBodyLimitBytes = 30_000_000L;
     private static readonly string[] DefaultCoreKindFilter = { "dynamic", "static", "space" };
+    private static readonly string[] DefaultNqUtilsDllPaths =
+    {
+        @"D:\MyDUserver\wincs\all\NQutils.dll",
+        @"d:\MyDUserver\wincs\all\NQutils.dll",
+        @"D:\github\NQUtils\NQutils\bin\Debug\NQutils.dll",
+        @"D:\github\NQUtils\NQutils\bin\Release\NQutils.dll"
+    };
+
     private readonly HttpClient _httpClient;
 
     public MyDuDataService(HttpClient? httpClient = null)
@@ -442,6 +459,65 @@ public sealed class MyDuDataService
         return records;
     }
 
+    public async Task<IReadOnlyDictionary<ulong, string>> GetItemDefinitionDisplayNamesAsync(
+        DataConnectionOptions options,
+        IReadOnlyCollection<ulong> itemDefinitionIds,
+        CancellationToken cancellationToken)
+    {
+        if (itemDefinitionIds is null || itemDefinitionIds.Count == 0)
+        {
+            return new Dictionary<ulong, string>();
+        }
+
+        long[] ids = itemDefinitionIds
+            .Where(id => id > 0UL && id <= long.MaxValue)
+            .Select(id => (long)id)
+            .Distinct()
+            .ToArray();
+        if (ids.Length == 0)
+        {
+            return new Dictionary<ulong, string>();
+        }
+
+        await using var connection = new NpgsqlConnection(BuildConnectionString(options));
+        await connection.OpenAsync(cancellationToken);
+
+        const string sql = """
+            SELECT id,
+                   COALESCE(
+                       NULLIF(substring(yaml from E'displayName:\\s*([^\\n\\r]+)'), ''),
+                       NULLIF(name, ''),
+                       ''
+                   ) AS display_name
+            FROM item_definition
+            WHERE id = ANY(@ids);
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("ids", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Bigint, ids);
+
+        var result = new Dictionary<ulong, string>();
+        await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            ulong? id = TryGetUInt64(reader, 0);
+            if (!id.HasValue)
+            {
+                continue;
+            }
+
+            string displayName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1).Trim();
+            if (string.IsNullOrWhiteSpace(displayName))
+            {
+                continue;
+            }
+
+            result[id.Value] = displayName;
+        }
+
+        return result;
+    }
+
     public Task<IReadOnlyList<UserConstructRecord>> GetUserConstructsSortedByNameAsync(
         DataConnectionOptions options,
         ulong userId,
@@ -634,34 +710,2646 @@ public sealed class MyDuDataService
         }
     }
 
-    public BlueprintImportResult ParseBlueprintJson(string jsonContent, string sourceName)
+    public BlueprintImportResult ParseBlueprintJson(
+        string jsonContent,
+        string sourceName,
+        string? serverRootPath = null,
+        string? nqUtilsDllPath = null)
     {
         if (string.IsNullOrWhiteSpace(jsonContent))
         {
             throw new ArgumentException("Blueprint JSON content is empty.", nameof(jsonContent));
         }
 
-        using JsonDocument document = JsonDocument.Parse(
-            jsonContent,
-            new JsonDocumentOptions
+        NqBlueprintProbe nqProbe = ProbeBlueprintWithNqDll(jsonContent, serverRootPath, nqUtilsDllPath);
+        BlueprintImportResult projected = ParseBlueprintJsonLegacy(jsonContent, sourceName, serverRootPath);
+
+        string importPipeline;
+        string importNotes;
+        if (nqProbe.Success)
+        {
+            importPipeline = "NQutils.dll preflight + JSON projection";
+            importNotes =
+                $"Validated via {nqProbe.DllPath}; elements={nqProbe.ElementCount}, links={nqProbe.LinkCount}, voxelData={(nqProbe.HasVoxelData ? "present" : "missing")}.";
+        }
+        else if (nqProbe.DllUnavailable)
+        {
+            importPipeline = "Legacy JSON projection (NQ DLL unavailable)";
+            importNotes = nqProbe.Message;
+        }
+        else
+        {
+            importPipeline = "Legacy JSON projection (NQ preflight warning)";
+            importNotes = $"NQ preflight warning: {nqProbe.Message}";
+        }
+
+        ulong? blueprintId = NormalizeBlueprintId(projected.BlueprintId ?? nqProbe.BlueprintId);
+        string blueprintName = projected.BlueprintName;
+        if (string.IsNullOrWhiteSpace(blueprintName) && !string.IsNullOrWhiteSpace(nqProbe.BlueprintName))
+        {
+            blueprintName = nqProbe.BlueprintName;
+        }
+
+        int elementCount = nqProbe.Success && nqProbe.ElementCount > 0
+            ? nqProbe.ElementCount
+            : projected.ElementCount;
+
+        return projected with
+        {
+            BlueprintName = blueprintName,
+            BlueprintId = blueprintId,
+            ElementCount = elementCount,
+            ImportPipeline = importPipeline,
+            ImportNotes = importNotes
+        };
+    }
+
+    public BlueprintImportResult ParseBlueprintJsonFile(
+        string blueprintFilePath,
+        string sourceName,
+        string? serverRootPath = null,
+        string? nqUtilsDllPath = null)
+    {
+        if (string.IsNullOrWhiteSpace(blueprintFilePath))
+        {
+            throw new ArgumentException("Blueprint file path is required.", nameof(blueprintFilePath));
+        }
+
+        string fullPath = Path.GetFullPath(blueprintFilePath);
+        using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        if (stream.Length <= MaxBytesForInMemoryNqPreflight)
+        {
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            string jsonContent = reader.ReadToEnd();
+            return ParseBlueprintJson(jsonContent, sourceName, serverRootPath, nqUtilsDllPath);
+        }
+
+        BlueprintImportResult projected = ParseBlueprintJsonLegacy(stream, sourceName, serverRootPath);
+        string fileSize = FormatByteLength(stream.Length);
+        return projected with
+        {
+            ImportPipeline = "Legacy JSON projection (NQ preflight skipped for large file)",
+            ImportNotes =
+                $"NQ preflight skipped to avoid full file read for large JSON ({fileSize}). " +
+                $"Threshold={FormatByteLength(MaxBytesForInMemoryNqPreflight)}."
+        };
+    }
+
+    public async Task<BlueprintGameDatabaseImportResult> ImportBlueprintIntoGameDatabaseAsync(
+        string jsonContent,
+        string endpointTemplate,
+        string? blueprintImportEndpoint,
+        ulong creatorPlayerId,
+        ulong creatorOrganizationId,
+        bool appendDateIfExists,
+        DataConnectionOptions? nameCollisionLookupOptions,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(jsonContent))
+        {
+            throw new ArgumentException("Blueprint JSON content is empty.", nameof(jsonContent));
+        }
+
+        byte[] payload = Encoding.UTF8.GetBytes(jsonContent);
+        return await ImportBlueprintPayloadToGameDatabaseAsync(
+            payload,
+            endpointTemplate,
+            blueprintImportEndpoint,
+            creatorPlayerId,
+            creatorOrganizationId,
+            appendDateIfExists,
+            nameCollisionLookupOptions,
+            cancellationToken);
+    }
+
+    public async Task<BlueprintGameDatabaseImportResult> ImportBlueprintFileIntoGameDatabaseAsync(
+        string blueprintFilePath,
+        string endpointTemplate,
+        string? blueprintImportEndpoint,
+        ulong creatorPlayerId,
+        ulong creatorOrganizationId,
+        bool appendDateIfExists,
+        DataConnectionOptions? nameCollisionLookupOptions,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(blueprintFilePath))
+        {
+            throw new ArgumentException("Blueprint file path is required.", nameof(blueprintFilePath));
+        }
+
+        string fullPath = Path.GetFullPath(blueprintFilePath);
+        byte[] payload = await File.ReadAllBytesAsync(fullPath, cancellationToken);
+        return await ImportBlueprintPayloadToGameDatabaseAsync(
+            payload,
+            endpointTemplate,
+            blueprintImportEndpoint,
+            creatorPlayerId,
+            creatorOrganizationId,
+            appendDateIfExists,
+            nameCollisionLookupOptions,
+            cancellationToken);
+    }
+
+    private async Task<BlueprintGameDatabaseImportResult> ImportBlueprintPayloadToGameDatabaseAsync(
+        byte[] blueprintJsonUtf8Payload,
+        string endpointTemplate,
+        string? blueprintImportEndpoint,
+        ulong creatorPlayerId,
+        ulong creatorOrganizationId,
+        bool appendDateIfExists,
+        DataConnectionOptions? nameCollisionLookupOptions,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<Uri> endpoints = BuildBlueprintImportEndpointCandidates(
+            endpointTemplate,
+            blueprintImportEndpoint,
+            creatorPlayerId,
+            creatorOrganizationId);
+
+        var endpointFailures = new List<string>();
+        Exception? lastException = null;
+        foreach (Uri endpoint in endpoints)
+        {
+            try
             {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip
+                return await SendBlueprintImportRequestAsync(
+                    endpoint,
+                    blueprintJsonUtf8Payload,
+                    creatorPlayerId,
+                    creatorOrganizationId,
+                    appendDateIfExists,
+                    nameCollisionLookupOptions,
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+                endpointFailures.Add($"'{endpoint}': {BuildEndpointAttemptError(ex)}");
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Game DB blueprint import failed for all endpoint candidates: {string.Join(" | ", endpointFailures)}",
+            lastException);
+    }
+
+    private async Task<BlueprintGameDatabaseImportResult> SendBlueprintImportRequestAsync(
+        Uri endpoint,
+        byte[] blueprintJsonUtf8Payload,
+        ulong creatorPlayerId,
+        ulong creatorOrganizationId,
+        bool appendDateIfExists,
+        DataConnectionOptions? nameCollisionLookupOptions,
+        CancellationToken cancellationToken)
+    {
+        if (blueprintJsonUtf8Payload is null || blueprintJsonUtf8Payload.Length == 0)
+        {
+            throw new InvalidOperationException("Blueprint payload is empty.");
+        }
+
+        (byte[] requestPayload, string requestNotes) =
+            PrepareBlueprintPayloadForGameDatabaseImport(
+                blueprintJsonUtf8Payload,
+                creatorPlayerId,
+                creatorOrganizationId);
+
+        (requestPayload, requestNotes) = await TryApplyNameCollisionDateSuffixAsync(
+            requestPayload,
+            requestNotes,
+            appendDateIfExists,
+            nameCollisionLookupOptions,
+            cancellationToken);
+
+        try
+        {
+            return await SendBlueprintImportRequestCoreAsync(
+                endpoint,
+                requestPayload,
+                requestNotes,
+                cancellationToken);
+        }
+        catch (Exception primaryFailure)
+            when (ShouldAttemptNoVoxelDataFallback(primaryFailure) &&
+                  TryBuildNoVoxelDataFallbackPayload(
+                      requestPayload,
+                      out byte[] noVoxelPayload,
+                      out string fallbackNote))
+        {
+            string fallbackRequestNotes = AppendRequestNotes(requestNotes, fallbackNote);
+            try
+            {
+                BlueprintGameDatabaseImportResult fallbackResult = await SendBlueprintImportRequestCoreAsync(
+                    endpoint,
+                    noVoxelPayload,
+                    fallbackRequestNotes,
+                    cancellationToken);
+
+                return await TryBackfillVoxelDataAfterNoVoxelImportAsync(
+                    endpoint,
+                    requestPayload,
+                    fallbackResult,
+                    cancellationToken);
+            }
+            catch (Exception fallbackFailure)
+            {
+                throw new InvalidOperationException(
+                    $"Game DB blueprint import failed at '{endpoint}' after no-voxel fallback. " +
+                    $"Primary failure: {BuildEndpointAttemptError(primaryFailure)} | " +
+                    $"Fallback failure: {BuildEndpointAttemptError(fallbackFailure)}",
+                    fallbackFailure);
+            }
+        }
+    }
+
+    private async Task<(byte[] Payload, string Notes)> TryApplyNameCollisionDateSuffixAsync(
+        byte[] requestPayload,
+        string requestNotes,
+        bool appendDateIfExists,
+        DataConnectionOptions? nameCollisionLookupOptions,
+        CancellationToken cancellationToken)
+    {
+        if (!appendDateIfExists)
+        {
+            return (requestPayload, requestNotes);
+        }
+
+        if (nameCollisionLookupOptions is null)
+        {
+            return (
+                requestPayload,
+                AppendRequestNotes(
+                    requestNotes,
+                    "Append-date rename requested, but DB options are unavailable; skipped."));
+        }
+
+        if (!TryReadBlueprintModelName(requestPayload, out string blueprintName, out string readReason))
+        {
+            return (
+                requestPayload,
+                AppendRequestNotes(
+                    requestNotes,
+                    $"Append-date rename skipped: {readReason}"));
+        }
+
+        bool exists;
+        try
+        {
+            exists = await DoesBlueprintNameExistAsync(
+                nameCollisionLookupOptions,
+                blueprintName,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return (
+                requestPayload,
+                AppendRequestNotes(
+                    requestNotes,
+                    $"Append-date rename skipped: name lookup failed ({BuildSingleLineExceptionPreview(ex)})"));
+        }
+
+        if (!exists)
+        {
+            return (requestPayload, requestNotes);
+        }
+
+        string suffix = DateTime.Now.ToString("yy-MM-dd", CultureInfo.InvariantCulture);
+        string renamedBlueprintName = $"{blueprintName}-{suffix}";
+        if (!TryRenameBlueprintModelName(
+                requestPayload,
+                renamedBlueprintName,
+                out byte[] renamedPayload,
+                out string renameReason))
+        {
+            return (
+                requestPayload,
+                AppendRequestNotes(
+                    requestNotes,
+                    $"Append-date rename skipped: {renameReason}"));
+        }
+
+        string renameNote =
+            $"Blueprint name collision detected for '{blueprintName}'; renamed to '{renamedBlueprintName}'.";
+        return (renamedPayload, AppendRequestNotes(requestNotes, renameNote));
+    }
+
+    private async Task<bool> DoesBlueprintNameExistAsync(
+        DataConnectionOptions options,
+        string blueprintName,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(BuildConnectionString(options));
+        await connection.OpenAsync(cancellationToken);
+
+        const string sql = """
+            SELECT EXISTS(
+                SELECT 1
+                FROM blueprint
+                WHERE lower(name) = lower(@name)
+            );
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("name", blueprintName);
+        object? result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return result is bool exists && exists;
+    }
+
+    private static bool TryReadBlueprintModelName(
+        byte[] payload,
+        out string blueprintName,
+        out string reason)
+    {
+        blueprintName = string.Empty;
+        reason = "blueprint model name not found";
+
+        try
+        {
+            string jsonText = Encoding.UTF8.GetString(payload);
+            JsonNode? root = JsonNode.Parse(jsonText);
+            if (root is not JsonObject rootObject ||
+                !TryGetJsonPropertyIgnoreCase(rootObject, "model", out _, out JsonNode? modelNode) ||
+                modelNode is not JsonObject modelObject ||
+                !TryGetJsonPropertyIgnoreCase(modelObject, "name", out _, out JsonNode? nameNode) ||
+                !TryReadJsonString(nameNode, out string modelName))
+            {
+                return false;
+            }
+
+            blueprintName = modelName.Trim();
+            if (string.IsNullOrWhiteSpace(blueprintName))
+            {
+                reason = "blueprint model name is empty";
+                return false;
+            }
+
+            reason = string.Empty;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            reason = $"invalid blueprint JSON ({BuildSingleLineExceptionPreview(ex)})";
+            return false;
+        }
+    }
+
+    private static bool TryRenameBlueprintModelName(
+        byte[] sourcePayload,
+        string renamedBlueprintName,
+        out byte[] renamedPayload,
+        out string reason)
+    {
+        renamedPayload = sourcePayload;
+        reason = "blueprint model name not found";
+
+        try
+        {
+            string jsonText = Encoding.UTF8.GetString(sourcePayload);
+            JsonNode? root = JsonNode.Parse(jsonText);
+            if (root is not JsonObject rootObject ||
+                !TryGetJsonPropertyIgnoreCase(rootObject, "model", out _, out JsonNode? modelNode) ||
+                modelNode is not JsonObject modelObject ||
+                !TryGetJsonPropertyIgnoreCase(modelObject, "name", out string nameKey, out JsonNode? nameNode) ||
+                !TryReadJsonString(nameNode, out string previousName))
+            {
+                return false;
+            }
+
+            string oldName = previousName.Trim();
+            string newName = (renamedBlueprintName ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(newName))
+            {
+                reason = "renamed blueprint name is empty";
+                return false;
+            }
+
+            if (string.Equals(oldName, newName, StringComparison.Ordinal))
+            {
+                reason = "name already has requested suffix";
+                return false;
+            }
+
+            modelObject[nameKey] = JsonValue.Create(newName);
+            string renamedJson = rootObject.ToJsonString(new JsonSerializerOptions
+            {
+                WriteIndented = false
             });
 
-        JsonElement root = document.RootElement;
+            byte[] candidate = Encoding.UTF8.GetBytes(renamedJson);
+            if (candidate.Length == 0 || sourcePayload.SequenceEqual(candidate))
+            {
+                reason = "payload unchanged after rename";
+                return false;
+            }
+
+            renamedPayload = candidate;
+            reason = string.Empty;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            reason = $"rename failed ({BuildSingleLineExceptionPreview(ex)})";
+            return false;
+        }
+    }
+
+    private async Task<BlueprintGameDatabaseImportResult> SendBlueprintImportRequestCoreAsync(
+        Uri endpoint,
+        byte[] requestPayload,
+        string requestNotes,
+        CancellationToken cancellationToken)
+    {
+        var attemptNotes = new List<string>();
+        if (!string.IsNullOrWhiteSpace(requestNotes))
+        {
+            attemptNotes.Add(requestNotes);
+        }
+
+        string requestNotesSuffix = string.IsNullOrWhiteSpace(requestNotes)
+            ? string.Empty
+            : $" Notes: {requestNotes}";
+        ImportRequestPayloadKind[] attempts =
+        {
+            ImportRequestPayloadKind.JsonBase64ByteArray
+        };
+
+        const int maxTransportRecoveryRetries = 1;
+        for (int attemptIndex = 0; attemptIndex < attempts.Length; attemptIndex++)
+        {
+            ImportRequestPayloadKind payloadKind = attempts[attemptIndex];
+            bool hasFallbackAttempt = attemptIndex < attempts.Length - 1;
+
+            for (int transportAttempt = 0; transportAttempt <= maxTransportRecoveryRetries; transportAttempt++)
+            {
+                try
+                {
+                    using HttpRequestMessage request = BuildBlueprintImportRequest(endpoint, requestPayload, payloadKind);
+                    using HttpResponseMessage response = await _httpClient.SendAsync(
+                        request,
+                        HttpCompletionOption.ResponseContentRead,
+                        cancellationToken);
+                    byte[] responseBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                    string? responseMediaType = response.Content.Headers.ContentType?.MediaType;
+                    string responseText = BuildImportResponsePreview(responseBytes, responseMediaType);
+                    ulong? importedBlueprintId = TryParseBlueprintIdFromImportResponse(
+                        responseText,
+                        responseBytes,
+                        responseMediaType);
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        return new BlueprintGameDatabaseImportResult(
+                            endpoint,
+                            (int)response.StatusCode,
+                            importedBlueprintId,
+                            responseText,
+                            requestNotes);
+                    }
+
+                    string httpFailure =
+                        $"{GetPayloadKindDisplayName(payloadKind)}: HTTP {(int)response.StatusCode} {response.StatusCode}, body={BuildHttpBodyPreview(responseText)}";
+                    if (hasFallbackAttempt)
+                    {
+                        attemptNotes.Add(httpFailure);
+                        break;
+                    }
+
+                    throw new InvalidOperationException(
+                        $"Game DB blueprint import failed at '{endpoint}' ({httpFailure}).{requestNotesSuffix}");
+                }
+                catch (HttpRequestException ex) when (hasFallbackAttempt)
+                {
+                    attemptNotes.Add($"{GetPayloadKindDisplayName(payloadKind)}: transport error ({BuildTransportErrorPreview(ex)})");
+                    break;
+                }
+                catch (HttpRequestException ex) when (ShouldAttemptTransportRecovery(ex) && transportAttempt < maxTransportRecoveryRetries)
+                {
+                    attemptNotes.Add(
+                        $"{GetPayloadKindDisplayName(payloadKind)}: transport disruption detected ({BuildTransportErrorPreview(ex)}), waiting for backend recovery and retrying.");
+
+                    await WaitForEndpointPortRecoveryAsync(endpoint, TimeSpan.FromSeconds(60), cancellationToken);
+                    continue;
+                }
+                catch (HttpRequestException ex) when (IsConnectionResetException(ex))
+                {
+                    string payloadSize = FormatByteLength(requestPayload.LongLength);
+                    throw new InvalidOperationException(
+                        $"Game DB endpoint closed the connection during blueprint import at '{endpoint}' " +
+                        $"(payload {payloadSize}, format={GetPayloadKindDisplayName(payloadKind)}). " +
+                        $"Check backend logs for import exceptions and verify the endpoint/port.{requestNotesSuffix}",
+                        ex);
+                }
+                catch (HttpRequestException ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Game DB blueprint import transport failed at '{endpoint}' " +
+                        $"(format={GetPayloadKindDisplayName(payloadKind)}): {BuildTransportErrorPreview(ex)}.{requestNotesSuffix}",
+                        ex);
+                }
+            }
+        }
+
+        string attemptsSummary = attemptNotes.Count == 0
+            ? "No further details."
+            : string.Join(" | ", attemptNotes);
+        throw new InvalidOperationException(
+            $"Game DB blueprint import failed at '{endpoint}'. Attempts: {attemptsSummary}");
+    }
+
+    private async Task<BlueprintGameDatabaseImportResult> TryBackfillVoxelDataAfterNoVoxelImportAsync(
+        Uri gameplayImportEndpoint,
+        byte[] sourcePayloadWithVoxelData,
+        BlueprintGameDatabaseImportResult fallbackResult,
+        CancellationToken cancellationToken)
+    {
+        ulong? importedBlueprintId = NormalizeBlueprintId(fallbackResult.BlueprintId);
+        if (!importedBlueprintId.HasValue)
+        {
+            string noIdNote =
+                "Voxel backfill skipped: imported blueprint id was not returned by backend response.";
+            return fallbackResult with
+            {
+                RequestNotes = AppendRequestNotes(fallbackResult.RequestNotes, noIdNote)
+            };
+        }
+
+        try
+        {
+            string backfillNote = await BackfillVoxelDataViaVoxelServiceAsync(
+                gameplayImportEndpoint,
+                importedBlueprintId.Value,
+                sourcePayloadWithVoxelData,
+                clearExistingCells: true,
+                cancellationToken);
+
+            return fallbackResult with
+            {
+                RequestNotes = AppendRequestNotes(fallbackResult.RequestNotes, backfillNote)
+            };
+        }
+        catch (Exception ex)
+        {
+            string warn =
+                $"Voxel backfill failed via voxel service: {BuildSingleLineExceptionPreview(ex)}";
+            return fallbackResult with
+            {
+                RequestNotes = AppendRequestNotes(fallbackResult.RequestNotes, warn)
+            };
+        }
+    }
+
+    private async Task<string> BackfillVoxelDataViaVoxelServiceAsync(
+        Uri gameplayImportEndpoint,
+        ulong targetBlueprintId,
+        byte[] sourcePayloadWithVoxelData,
+        bool clearExistingCells,
+        CancellationToken cancellationToken)
+    {
+        if (!TryBuildVoxelServiceImportPayload(
+                sourcePayloadWithVoxelData,
+                targetBlueprintId,
+                out byte[] voxelImportPayload,
+                out int sourceCellCount,
+                out string skipReason))
+        {
+            return $"Voxel backfill skipped: {skipReason}";
+        }
+
+        IReadOnlyList<Uri> importCandidates = BuildVoxelServiceJsonImportEndpointCandidates(
+            gameplayImportEndpoint,
+            targetBlueprintId,
+            clearExistingCells);
+
+        var failures = new List<string>();
+        foreach (Uri importEndpoint in importCandidates)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, importEndpoint)
+                {
+                    Version = HttpVersion.Version11,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+                    Content = new ByteArrayContent(voxelImportPayload)
+                };
+                request.Content.Headers.ContentType =
+                    new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+
+                using HttpResponseMessage response = await _httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseContentRead,
+                    cancellationToken);
+
+                byte[] responseBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                string responsePreview = BuildImportResponsePreview(
+                    responseBytes,
+                    response.Content.Headers.ContentType?.MediaType);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    failures.Add(
+                        $"'{importEndpoint}' => HTTP {(int)response.StatusCode} {response.StatusCode}, body={BuildHttpBodyPreview(responsePreview)}");
+                    continue;
+                }
+
+                int dumpCellCount = await VerifyVoxelBlueprintDumpCellCountAsync(
+                    importEndpoint,
+                    targetBlueprintId,
+                    cancellationToken);
+
+                string clearFlag = clearExistingCells ? "1" : "0";
+                return
+                    $"Voxel backfill applied via voxel service at '{importEndpoint}' " +
+                    $"(clear={clearFlag}, source cells={sourceCellCount.ToString(CultureInfo.InvariantCulture)}, " +
+                    $"dump cells={dumpCellCount.ToString(CultureInfo.InvariantCulture)}).";
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"'{importEndpoint}' => {BuildSingleLineExceptionPreview(ex)}");
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Voxel backfill via voxel service failed for all endpoint candidates: {string.Join(" | ", failures)}");
+    }
+
+    private async Task<int> VerifyVoxelBlueprintDumpCellCountAsync(
+        Uri voxelJsonImportEndpoint,
+        ulong blueprintId,
+        CancellationToken cancellationToken)
+    {
+        Uri dumpEndpoint = BuildVoxelServiceDumpEndpoint(voxelJsonImportEndpoint, blueprintId);
+        using var request = new HttpRequestMessage(HttpMethod.Get, dumpEndpoint)
+        {
+            Version = HttpVersion.Version11,
+            VersionPolicy = HttpVersionPolicy.RequestVersionOrLower
+        };
+        using HttpResponseMessage response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseContentRead,
+            cancellationToken);
+        byte[] dumpBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        string dumpText = Encoding.UTF8.GetString(dumpBytes);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            string preview = BuildHttpBodyPreview(dumpText);
+            throw new InvalidOperationException(
+                $"voxel dump verification failed at '{dumpEndpoint}' " +
+                $"(HTTP {(int)response.StatusCode} {response.StatusCode}, body={preview})");
+        }
+
+        JsonNode? dumpNode = JsonNode.Parse(dumpText);
+        if (dumpNode is not JsonObject dumpObject ||
+            !TryGetJsonPropertyIgnoreCase(dumpObject, "cells", out _, out JsonNode? cellsNode) ||
+            cellsNode is not JsonArray cellsArray)
+        {
+            throw new InvalidOperationException(
+                $"voxel dump verification returned no 'cells' array at '{dumpEndpoint}'.");
+        }
+
+        return cellsArray.Count;
+    }
+
+    private static bool TryBuildVoxelServiceImportPayload(
+        byte[] sourceBlueprintPayload,
+        ulong targetBlueprintId,
+        out byte[] voxelImportPayload,
+        out int sourceCellCount,
+        out string reason)
+    {
+        voxelImportPayload = Array.Empty<byte>();
+        sourceCellCount = 0;
+        reason = "source blueprint has no VoxelData array";
+
+        try
+        {
+            string json = Encoding.UTF8.GetString(sourceBlueprintPayload);
+            JsonNode? root = JsonNode.Parse(json);
+            if (root is not JsonObject rootObject ||
+                !TryGetJsonPropertyIgnoreCase(rootObject, "VoxelData", out _, out JsonNode? voxelNode) ||
+                voxelNode is not JsonArray voxelArray)
+            {
+                return false;
+            }
+
+            if (voxelArray.Count == 0)
+            {
+                reason = "source blueprint VoxelData is empty";
+                return false;
+            }
+
+            var retargetedCells = new JsonArray();
+            foreach (JsonNode? sourceCell in voxelArray)
+            {
+                JsonNode? clonedCell = sourceCell?.DeepClone();
+                if (clonedCell is JsonObject cellObject)
+                {
+                    JsonObject targetOid = BuildMongoNumberLongObject(targetBlueprintId);
+                    if (TryGetJsonPropertyIgnoreCase(cellObject, "oid", out string oidName, out JsonNode? oidNode))
+                    {
+                        if (oidNode is JsonObject existingOidObject)
+                        {
+                            if (TryGetJsonPropertyIgnoreCase(
+                                    existingOidObject,
+                                    "$numberLong",
+                                    out string numberLongKey,
+                                    out _))
+                            {
+                                existingOidObject[numberLongKey] =
+                                    JsonValue.Create(targetBlueprintId.ToString(CultureInfo.InvariantCulture));
+                                cellObject[oidName] = existingOidObject;
+                            }
+                            else
+                            {
+                                cellObject[oidName] = targetOid;
+                            }
+                        }
+                        else
+                        {
+                            cellObject[oidName] = targetOid;
+                        }
+                    }
+                    else
+                    {
+                        cellObject["oid"] = targetOid;
+                    }
+                }
+
+                retargetedCells.Add(clonedCell);
+            }
+
+            sourceCellCount = retargetedCells.Count;
+            var voxelImportObject = new JsonObject
+            {
+                ["pipeline"] = null,
+                ["cells"] = retargetedCells
+            };
+
+            string importJson = voxelImportObject.ToJsonString(new JsonSerializerOptions
+            {
+                WriteIndented = false
+            });
+
+            voxelImportPayload = Encoding.UTF8.GetBytes(importJson);
+            reason = string.Empty;
+            return voxelImportPayload.Length > 0;
+        }
+        catch (Exception ex)
+        {
+            reason = $"unable to parse VoxelData ({BuildSingleLineExceptionPreview(ex)})";
+            return false;
+        }
+    }
+
+    private static JsonObject BuildMongoNumberLongObject(ulong value)
+    {
+        return new JsonObject
+        {
+            ["$numberLong"] = JsonValue.Create(value.ToString(CultureInfo.InvariantCulture))
+        };
+    }
+
+    private static IReadOnlyList<Uri> BuildVoxelServiceJsonImportEndpointCandidates(
+        Uri gameplayImportEndpoint,
+        ulong blueprintId,
+        bool clearExistingCells)
+    {
+        var candidates = new List<Uri>();
+
+        static void AddCandidate(List<Uri> list, Uri source, string host, ulong id, bool clear)
+        {
+            var builder = new UriBuilder(source)
+            {
+                Host = host,
+                Port = 8081,
+                Path = "/voxels/jsonImport",
+                Query =
+                    $"kind=blueprint&ids={id.ToString(CultureInfo.InvariantCulture)}&clear={(clear ? "1" : "0")}"
+            };
+            list.Add(builder.Uri);
+        }
+
+        string primaryHost = gameplayImportEndpoint.Host;
+        AddCandidate(candidates, gameplayImportEndpoint, primaryHost, blueprintId, clearExistingCells);
+
+        if (string.Equals(primaryHost, "localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            AddCandidate(candidates, gameplayImportEndpoint, "127.0.0.1", blueprintId, clearExistingCells);
+            AddCandidate(candidates, gameplayImportEndpoint, "::1", blueprintId, clearExistingCells);
+        }
+        else if (string.Equals(primaryHost, "127.0.0.1", StringComparison.OrdinalIgnoreCase))
+        {
+            AddCandidate(candidates, gameplayImportEndpoint, "::1", blueprintId, clearExistingCells);
+            AddCandidate(candidates, gameplayImportEndpoint, "localhost", blueprintId, clearExistingCells);
+        }
+        else if (string.Equals(primaryHost, "::1", StringComparison.OrdinalIgnoreCase))
+        {
+            AddCandidate(candidates, gameplayImportEndpoint, "127.0.0.1", blueprintId, clearExistingCells);
+            AddCandidate(candidates, gameplayImportEndpoint, "localhost", blueprintId, clearExistingCells);
+        }
+
+        var deduplicated = new List<Uri>(candidates.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Uri candidate in candidates)
+        {
+            if (seen.Add(candidate.AbsoluteUri))
+            {
+                deduplicated.Add(candidate);
+            }
+        }
+
+        return deduplicated;
+    }
+
+    private static Uri BuildVoxelServiceDumpEndpoint(Uri voxelJsonImportEndpoint, ulong blueprintId)
+    {
+        var builder = new UriBuilder(voxelJsonImportEndpoint)
+        {
+            Path = $"/voxels/blueprints/{blueprintId.ToString(CultureInfo.InvariantCulture)}/dump.json",
+            Query = string.Empty
+        };
+        return builder.Uri;
+    }
+
+    private static string AppendRequestNotes(string currentNotes, string additionalNote)
+    {
+        if (string.IsNullOrWhiteSpace(additionalNote))
+        {
+            return currentNotes;
+        }
+
+        if (string.IsNullOrWhiteSpace(currentNotes))
+        {
+            return additionalNote.Trim();
+        }
+
+        string trimmedCurrent = currentNotes.Trim();
+        return trimmedCurrent.EndsWith(".", StringComparison.Ordinal)
+            ? $"{trimmedCurrent} {additionalNote.Trim()}"
+            : $"{trimmedCurrent}; {additionalNote.Trim()}";
+    }
+
+    private static bool ShouldAttemptNoVoxelDataFallback(Exception ex)
+    {
+        if (ex is HttpRequestException httpEx && IsConnectionResetException(httpEx))
+        {
+            return true;
+        }
+
+        if (ex is InvalidOperationException invalidOperationException)
+        {
+            string message = invalidOperationException.Message;
+            if (message.Contains("closed the connection during blueprint import", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Unknown Exception got in server", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return ex.InnerException is not null && ShouldAttemptNoVoxelDataFallback(ex.InnerException);
+    }
+
+    private static bool TryBuildNoVoxelDataFallbackPayload(
+        byte[] sourcePayload,
+        out byte[] fallbackPayload,
+        out string fallbackNote)
+    {
+        fallbackPayload = sourcePayload;
+        fallbackNote = string.Empty;
+
+        try
+        {
+            string jsonText = Encoding.UTF8.GetString(sourcePayload);
+            JsonNode? root = JsonNode.Parse(jsonText);
+            if (root is not JsonObject rootObject)
+            {
+                return false;
+            }
+
+            if (!TryGetJsonPropertyIgnoreCase(rootObject, "VoxelData", out string voxelDataName, out JsonNode? voxelDataNode))
+            {
+                return false;
+            }
+
+            int voxelEntryCount = voxelDataNode is JsonArray voxelArray ? voxelArray.Count : -1;
+            if (voxelDataNode is JsonArray existingVoxelArray && existingVoxelArray.Count == 0)
+            {
+                return false;
+            }
+
+            rootObject[voxelDataName] = new JsonArray();
+            string fallbackJson = rootObject.ToJsonString(new JsonSerializerOptions
+            {
+                WriteIndented = false
+            });
+
+            byte[] candidatePayload = Encoding.UTF8.GetBytes(fallbackJson);
+            if (candidatePayload.Length == 0 || sourcePayload.SequenceEqual(candidatePayload))
+            {
+                return false;
+            }
+
+            fallbackPayload = candidatePayload;
+            string countText = voxelEntryCount >= 0
+                ? $"{voxelEntryCount.ToString(CultureInfo.InvariantCulture)} entries"
+                : "non-array value";
+            fallbackNote =
+                $"Fallback applied: stripped top-level VoxelData ({countText}) after backend voxel import failure.";
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string BuildEndpointAttemptError(Exception ex)
+    {
+        string message = ex.Message;
+        if (message.Length > 260)
+        {
+            return message[..257] + "...";
+        }
+
+        return message;
+    }
+
+    private static HttpRequestMessage BuildBlueprintImportRequest(
+        Uri endpoint,
+        byte[] blueprintJsonUtf8Payload,
+        ImportRequestPayloadKind payloadKind)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Version = HttpVersion.Version11,
+            VersionPolicy = HttpVersionPolicy.RequestVersionOrLower
+        };
+        request.Headers.ConnectionClose = true;
+        request.Headers.ExpectContinue = false;
+
+        switch (payloadKind)
+        {
+            case ImportRequestPayloadKind.JsonBase64ByteArray:
+            {
+                string encodedPayload = Convert.ToBase64String(blueprintJsonUtf8Payload);
+                string requestBody = System.Text.Json.JsonSerializer.Serialize(encodedPayload);
+                request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+                break;
+            }
+            default:
+                throw new InvalidOperationException($"Unsupported import payload kind: {payloadKind}");
+        }
+
+        return request;
+    }
+
+    private static (byte[] Payload, string Notes) PrepareBlueprintPayloadForGameDatabaseImport(
+        byte[] originalPayload,
+        ulong creatorPlayerId,
+        ulong creatorOrganizationId)
+    {
+        if (originalPayload.Length == 0)
+        {
+            return (originalPayload, string.Empty);
+        }
+
+        try
+        {
+            string jsonText = Encoding.UTF8.GetString(originalPayload);
+            JsonNode? root = JsonNode.Parse(jsonText);
+            if (root is null)
+            {
+                return (originalPayload, string.Empty);
+            }
+
+            var notes = new List<string>();
+            int normalizedElementMaps = NormalizeElementPropertyMaps(
+                root,
+                out int removedMalformedServerProperties);
+            if (normalizedElementMaps > 0)
+            {
+                notes.Add(
+                    $"normalized {normalizedElementMaps.ToString(CultureInfo.InvariantCulture)} element property maps");
+            }
+            if (removedMalformedServerProperties > 0)
+            {
+                notes.Add(
+                    $"repaired malformed serverProperties in {removedMalformedServerProperties.ToString(CultureInfo.InvariantCulture)} elements");
+            }
+
+            string normalizedJson = root.ToJsonString(new JsonSerializerOptions
+            {
+                WriteIndented = false
+            });
+            byte[] normalizedPayload = Encoding.UTF8.GetBytes(normalizedJson);
+            if (normalizedPayload.Length < originalPayload.Length)
+            {
+                notes.Add(
+                    $"minified JSON payload from {FormatByteLength(originalPayload.LongLength)} to {FormatByteLength(normalizedPayload.LongLength)}");
+            }
+
+            long estimatedRequestBodyBytes = EstimateJsonBase64RequestBodyLength(normalizedPayload.LongLength);
+            if (estimatedRequestBodyBytes > EstimatedDefaultJsonRequestBodyLimitBytes)
+            {
+                notes.Add(
+                    $"request body remains large after base64 (~{FormatByteLength(estimatedRequestBodyBytes)}); backend may reject it unless request size limits are increased");
+            }
+
+            bool payloadChanged = normalizedElementMaps > 0 ||
+                                  removedMalformedServerProperties > 0 ||
+                                  normalizedPayload.Length < originalPayload.Length;
+            if (!payloadChanged)
+            {
+                return (originalPayload, string.Empty);
+            }
+
+            string noteText = notes.Count == 0
+                ? "Runtime normalization applied."
+                : $"Runtime normalization applied: {string.Join("; ", notes)}.";
+            return (normalizedPayload, noteText);
+        }
+        catch (Exception ex)
+        {
+            return (
+                originalPayload,
+                $"Runtime normalization skipped: {BuildSingleLineExceptionPreview(ex)}");
+        }
+    }
+
+    private static int NormalizeElementPropertyMaps(
+        JsonNode root,
+        out int removedMalformedServerProperties)
+    {
+        removedMalformedServerProperties = 0;
+        if (root is not JsonObject rootObject)
+        {
+            return 0;
+        }
+
+        if (!TryGetJsonPropertyIgnoreCase(rootObject, "elements", out string elementsKey, out JsonNode? elementsNode) ||
+            elementsNode is not JsonArray elementsArray)
+        {
+            return 0;
+        }
+
+        int normalizedCount = 0;
+        for (int i = 0; i < elementsArray.Count; i++)
+        {
+            if (elementsArray[i] is not JsonObject elementObject)
+            {
+                continue;
+            }
+
+            normalizedCount += NormalizeElementPropertiesField(elementObject);
+            normalizedCount += NormalizeElementServerPropertiesField(
+                elementObject,
+                out bool removedServerProperties);
+            if (removedServerProperties)
+            {
+                removedMalformedServerProperties++;
+            }
+        }
+
+        // Keep case/style as found in source document.
+        rootObject[elementsKey] = elementsArray;
+        return normalizedCount;
+    }
+
+    private static int NormalizeElementPropertiesField(JsonObject elementObject)
+    {
+        if (!TryGetJsonPropertyIgnoreCase(elementObject, "properties", out string actualName, out JsonNode? node))
+        {
+            return 0;
+        }
+
+        // ElementInfo.properties uses PropertyMapConverter and must stay in array form:
+        // [ ["name", { "type": ..., "value": ... }], ... ].
+        if (node is JsonArray propertyArray)
+        {
+            int fixes = CanonicalizePropertyEntryArray(propertyArray);
+            if (fixes > 0)
+            {
+                elementObject[actualName] = propertyArray;
+            }
+
+            return fixes;
+        }
+
+        if (node is JsonObject propertyMapObject)
+        {
+            JsonArray converted = ConvertPropertyObjectToArray(propertyMapObject);
+            elementObject[actualName] = converted;
+            return 1;
+        }
+
+        if (node is null)
+        {
+            elementObject[actualName] = new JsonArray();
+            return 1;
+        }
+
+        // Unsupported scalar payload: reset to empty, valid property map array.
+        elementObject[actualName] = new JsonArray();
+        return 1;
+    }
+
+    private static int NormalizeElementServerPropertiesField(
+        JsonObject elementObject,
+        out bool removedServerProperties)
+    {
+        removedServerProperties = false;
+        if (!TryGetJsonPropertyIgnoreCase(elementObject, "serverProperties", out string actualName, out JsonNode? node))
+        {
+            return 0;
+        }
+
+        if (node is JsonObject)
+        {
+            int fixes = NormalizePropertyMapObjectValues((JsonObject)node);
+            if (fixes > 0)
+            {
+                elementObject[actualName] = node;
+            }
+
+            return fixes;
+        }
+
+        if (node is JsonArray arrayNode)
+        {
+            JsonObject converted = ConvertPropertyArrayToObject(arrayNode, out int droppedEntries);
+            elementObject[actualName] = converted;
+            return 1 + droppedEntries;
+        }
+
+        if (node is null)
+        {
+            elementObject[actualName] = new JsonObject();
+            removedServerProperties = true;
+            return 1;
+        }
+
+        // serverProperties is a Dictionary<string, PropertyValue> without PropertyMapConverter.
+        // Scalars are irrecoverable for that shape; coerce to empty object map.
+        elementObject[actualName] = new JsonObject();
+        removedServerProperties = true;
+        return 1;
+    }
+
+    private static int NormalizePropertyMapObjectValues(JsonObject propertyMap)
+    {
+        if (propertyMap.Count == 0)
+        {
+            return 0;
+        }
+
+        var toRemove = new List<string>();
+        var toReplace = new List<KeyValuePair<string, JsonNode?>>();
+
+        foreach (KeyValuePair<string, JsonNode?> kvp in propertyMap)
+        {
+            if (string.IsNullOrWhiteSpace(kvp.Key) || kvp.Value is null)
+            {
+                toRemove.Add(kvp.Key);
+                continue;
+            }
+
+            JsonNode normalized = NormalizePropertyPayloadForMap(kvp.Value, out bool payloadChanged);
+            if (payloadChanged || !JsonNode.DeepEquals(kvp.Value, normalized))
+            {
+                toReplace.Add(new KeyValuePair<string, JsonNode?>(kvp.Key, normalized));
+            }
+        }
+
+        int fixes = toRemove.Count + toReplace.Count;
+        if (fixes == 0)
+        {
+            return 0;
+        }
+
+        foreach (string key in toRemove)
+        {
+            propertyMap.Remove(key);
+        }
+
+        foreach (KeyValuePair<string, JsonNode?> kvp in toReplace)
+        {
+            propertyMap[kvp.Key] = kvp.Value;
+        }
+
+        return fixes;
+    }
+
+    private static JsonObject ConvertPropertyArrayToObject(JsonArray source, out int droppedEntries)
+    {
+        droppedEntries = 0;
+        var map = new JsonObject();
+        foreach (JsonNode? entry in source)
+        {
+            if (!TryReadPropertyMapEntry(entry, out string key, out JsonNode? payloadNode) ||
+                string.IsNullOrWhiteSpace(key) ||
+                payloadNode is null)
+            {
+                droppedEntries++;
+                continue;
+            }
+
+            JsonNode normalized = NormalizePropertyPayloadForMap(payloadNode, out _);
+            map[key] = normalized;
+        }
+
+        return map;
+    }
+
+    private static bool TryReadPropertyMapEntry(
+        JsonNode? entry,
+        out string key,
+        out JsonNode? payloadNode)
+    {
+        key = string.Empty;
+        payloadNode = null;
+
+        if (entry is JsonArray pair)
+        {
+            if (pair.Count < 2 || !TryReadNonEmptyJsonString(pair[0], out key))
+            {
+                return false;
+            }
+
+            payloadNode = pair[1]?.DeepClone();
+            return payloadNode is not null;
+        }
+
+        if (entry is JsonObject obj)
+        {
+            if (TryGetJsonPropertyIgnoreCase(obj, "name", out _, out JsonNode? nameNode) &&
+                TryReadNonEmptyJsonString(nameNode, out string parsedName) &&
+                TryGetJsonPropertyIgnoreCase(obj, "value", out _, out JsonNode? valueNode))
+            {
+                key = parsedName;
+                payloadNode = valueNode?.DeepClone();
+                return payloadNode is not null;
+            }
+
+            if (TryGetJsonPropertyIgnoreCase(obj, "key", out _, out JsonNode? keyNode) &&
+                TryReadNonEmptyJsonString(keyNode, out string parsedKey) &&
+                TryGetJsonPropertyIgnoreCase(obj, "value", out _, out JsonNode? keyedValueNode))
+            {
+                key = parsedKey;
+                payloadNode = keyedValueNode?.DeepClone();
+                return payloadNode is not null;
+            }
+
+            if (obj.Count == 1)
+            {
+                KeyValuePair<string, JsonNode?> single = obj.First();
+                if (string.IsNullOrWhiteSpace(single.Key) || single.Value is null)
+                {
+                    return false;
+                }
+
+                key = single.Key;
+                payloadNode = single.Value.DeepClone();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static JsonNode NormalizePropertyPayloadForMap(JsonNode payloadNode, out bool changed)
+    {
+        changed = false;
+        if (payloadNode is JsonObject payloadObj &&
+            TryGetJsonPropertyIgnoreCase(payloadObj, "type", out _, out JsonNode? typeNode) &&
+            TryGetJsonPropertyIgnoreCase(payloadObj, "value", out _, out JsonNode? valueNode))
+        {
+            if (!TryGetIntFromJsonNode(typeNode, out int parsedType))
+            {
+                return CanonicalizePropertyPayload(payloadNode, out changed);
+            }
+
+            int normalizedType = parsedType;
+            JsonNode? normalizedValue;
+            bool valueChanged = false;
+            switch (parsedType)
+            {
+                case 1:
+                case 2:
+                case 3:
+                case 4:
+                case 5:
+                case 6:
+                case 7:
+                case 255:
+                    normalizedValue = CoercePropertyValueForType(
+                        ref normalizedType,
+                        valueNode?.DeepClone(),
+                        out valueChanged);
+                    break;
+                default:
+                    normalizedValue = valueNode?.DeepClone();
+                    break;
+            }
+
+            bool alreadyCanonical =
+                payloadObj.Count == 2 &&
+                payloadObj.ContainsKey("type") &&
+                payloadObj.ContainsKey("value");
+            bool typeChanged = normalizedType != parsedType;
+            if (alreadyCanonical &&
+                !typeChanged &&
+                !valueChanged &&
+                JsonNode.DeepEquals(payloadObj["value"], normalizedValue))
+            {
+                return payloadObj.DeepClone();
+            }
+
+            changed = true;
+            return new JsonObject
+            {
+                ["type"] = JsonValue.Create(normalizedType),
+                ["value"] = normalizedValue
+            };
+        }
+
+        return CanonicalizePropertyPayload(payloadNode, out changed);
+    }
+
+    private static bool TryReadNonEmptyJsonString(JsonNode? node, out string value)
+    {
+        value = string.Empty;
+        if (!TryReadJsonString(node, out string parsed) || string.IsNullOrWhiteSpace(parsed))
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    private static JsonArray ConvertPropertyObjectToArray(JsonObject source)
+    {
+        var array = new JsonArray();
+        foreach (KeyValuePair<string, JsonNode?> kvp in source)
+        {
+            JsonObject payload = CanonicalizePropertyPayload(kvp.Value, out _);
+            array.Add(new JsonArray
+            {
+                JsonValue.Create(kvp.Key),
+                payload
+            });
+        }
+
+        return array;
+    }
+
+    private static int CanonicalizePropertyEntryArray(JsonArray propertyArray)
+    {
+        int fixes = 0;
+        for (int index = 0; index < propertyArray.Count; index++)
+        {
+            JsonNode? entry = propertyArray[index];
+            if (!TryCanonicalizePropertyArrayEntry(entry, index, out JsonArray canonicalEntry, out bool changed))
+            {
+                continue;
+            }
+
+            if (changed)
+            {
+                propertyArray[index] = canonicalEntry;
+                fixes++;
+            }
+        }
+
+        return fixes;
+    }
+
+    private static bool TryCanonicalizePropertyArrayEntry(
+        JsonNode? entry,
+        int index,
+        out JsonArray canonicalEntry,
+        out bool changed)
+    {
+        changed = false;
+        string key = $"_idx{index.ToString(CultureInfo.InvariantCulture)}";
+        JsonNode? rawPayload = null;
+
+        if (entry is JsonArray pair)
+        {
+            if (pair.Count > 0 && TryReadJsonString(pair[0], out string parsedKey))
+            {
+                key = parsedKey;
+            }
+            else
+            {
+                changed = true;
+            }
+
+            if (pair.Count > 1)
+            {
+                rawPayload = pair[1];
+            }
+            else
+            {
+                changed = true;
+            }
+
+            if (pair.Count != 2)
+            {
+                changed = true;
+            }
+        }
+        else if (entry is JsonObject obj)
+        {
+            if (TryGetJsonPropertyIgnoreCase(obj, "name", out _, out JsonNode? nameNode) &&
+                TryReadJsonString(nameNode, out string parsedName))
+            {
+                key = parsedName;
+            }
+            else if (TryGetJsonPropertyIgnoreCase(obj, "key", out _, out JsonNode? keyNode) &&
+                     TryReadJsonString(keyNode, out string parsedKey))
+            {
+                key = parsedKey;
+            }
+            else if (obj.Count == 1)
+            {
+                KeyValuePair<string, JsonNode?> single = obj.First();
+                key = single.Key;
+                rawPayload = single.Value;
+                changed = true;
+            }
+            else
+            {
+                changed = true;
+            }
+
+            if (rawPayload is null)
+            {
+                if (TryGetJsonPropertyIgnoreCase(obj, "value", out _, out JsonNode? valueNode))
+                {
+                    rawPayload = valueNode;
+                }
+                else
+                {
+                    rawPayload = obj.DeepClone();
+                    changed = true;
+                }
+            }
+        }
+        else
+        {
+            rawPayload = entry?.DeepClone();
+            changed = true;
+        }
+
+        JsonObject canonicalPayload = CanonicalizePropertyPayload(rawPayload, out bool payloadChanged);
+        changed |= payloadChanged;
+
+        canonicalEntry = new JsonArray
+        {
+            JsonValue.Create(key),
+            canonicalPayload
+        };
+
+        if (!changed &&
+            entry is JsonArray originalPair &&
+            originalPair.Count == 2 &&
+            JsonNode.DeepEquals(originalPair[0], canonicalEntry[0]) &&
+            JsonNode.DeepEquals(originalPair[1], canonicalEntry[1]))
+        {
+            return true;
+        }
+
+        if (!changed && entry is not JsonArray)
+        {
+            changed = true;
+        }
+
+        return true;
+    }
+
+    private static JsonObject CanonicalizePropertyPayload(JsonNode? payloadNode, out bool changed)
+    {
+        changed = false;
+        int type;
+        JsonNode? valueNode;
+
+        if (payloadNode is JsonObject payloadObj &&
+            TryGetJsonPropertyIgnoreCase(payloadObj, "type", out _, out JsonNode? typeNode))
+        {
+            if (!TryGetIntFromJsonNode(typeNode, out type))
+            {
+                type = InferPropertyTypeFromNode(TryGetValueNode(payloadObj));
+                changed = true;
+            }
+
+            valueNode = TryGetValueNode(payloadObj);
+            if (valueNode is null)
+            {
+                valueNode = null;
+                changed = true;
+            }
+
+            if (!IsCanonicalPayloadObject(payloadObj))
+            {
+                changed = true;
+            }
+        }
+        else
+        {
+            valueNode = payloadNode;
+            type = InferPropertyTypeFromNode(valueNode);
+            changed = true;
+        }
+
+        JsonNode? canonicalValue = CoercePropertyValueForType(ref type, valueNode, out bool valueChanged);
+        changed |= valueChanged;
+
+        var canonicalPayload = new JsonObject
+        {
+            ["type"] = JsonValue.Create(type),
+            ["value"] = canonicalValue
+        };
+
+        if (!changed &&
+            payloadNode is JsonObject originalObject &&
+            !JsonNode.DeepEquals(originalObject, canonicalPayload))
+        {
+            changed = true;
+        }
+
+        return canonicalPayload;
+    }
+
+    private static JsonNode? TryGetValueNode(JsonObject payloadObj)
+    {
+        return TryGetJsonPropertyIgnoreCase(payloadObj, "value", out _, out JsonNode? valueNode)
+            ? valueNode
+            : null;
+    }
+
+    private static bool IsCanonicalPayloadObject(JsonObject payloadObj)
+    {
+        if (payloadObj.Count != 2)
+        {
+            return false;
+        }
+
+        KeyValuePair<string, JsonNode?> first = payloadObj.ElementAt(0);
+        KeyValuePair<string, JsonNode?> second = payloadObj.ElementAt(1);
+        return string.Equals(first.Key, "type", StringComparison.Ordinal) &&
+               string.Equals(second.Key, "value", StringComparison.Ordinal);
+    }
+
+    private static int InferPropertyTypeFromNode(JsonNode? node)
+    {
+        if (node is JsonValue scalar)
+        {
+            if (scalar.TryGetValue<bool>(out _))
+            {
+                return 1;
+            }
+
+            if (scalar.TryGetValue<long>(out _) || scalar.TryGetValue<int>(out _))
+            {
+                return 2;
+            }
+
+            if (scalar.TryGetValue<double>(out double floatValue))
+            {
+                return Math.Abs(floatValue % 1d) < 1e-9 ? 2 : 3;
+            }
+
+            return 4;
+        }
+
+        if (node is JsonArray array)
+        {
+            if (array.Count == 4)
+            {
+                return 5;
+            }
+
+            if (array.Count == 3)
+            {
+                return 6;
+            }
+
+            return 4;
+        }
+
+        if (node is JsonObject obj)
+        {
+            bool hasQuat = TryGetJsonPropertyIgnoreCase(obj, "w", out _, out _) &&
+                           TryGetJsonPropertyIgnoreCase(obj, "x", out _, out _) &&
+                           TryGetJsonPropertyIgnoreCase(obj, "y", out _, out _) &&
+                           TryGetJsonPropertyIgnoreCase(obj, "z", out _, out _);
+            if (hasQuat)
+            {
+                return 5;
+            }
+
+            bool hasVec3 = TryGetJsonPropertyIgnoreCase(obj, "x", out _, out _) &&
+                           TryGetJsonPropertyIgnoreCase(obj, "y", out _, out _) &&
+                           TryGetJsonPropertyIgnoreCase(obj, "z", out _, out _);
+            if (hasVec3)
+            {
+                return 6;
+            }
+        }
+
+        return 4;
+    }
+
+    private static JsonNode? CoercePropertyValueForType(ref int type, JsonNode? valueNode, out bool changed)
+    {
+        changed = false;
+        switch (type)
+        {
+            case 1:
+                if (TryGetBoolFromJsonNode(valueNode, out bool boolValue))
+                {
+                    if (!IsNodeBoolean(valueNode, boolValue))
+                    {
+                        changed = true;
+                    }
+
+                    return JsonValue.Create(boolValue);
+                }
+
+                changed = true;
+                type = 4;
+                return JsonValue.Create(ConvertJsonNodeToString(valueNode));
+            case 2:
+                if (TryGetLongFromJsonNode(valueNode, out long intValue))
+                {
+                    if (!IsNodeInteger(valueNode, intValue))
+                    {
+                        changed = true;
+                    }
+
+                    return JsonValue.Create(intValue);
+                }
+
+                changed = true;
+                type = 4;
+                return JsonValue.Create(ConvertJsonNodeToString(valueNode));
+            case 3:
+                if (TryGetDoubleFromJsonNode(valueNode, out double doubleValue))
+                {
+                    if (!IsNodeDouble(valueNode, doubleValue))
+                    {
+                        changed = true;
+                    }
+
+                    return JsonValue.Create(doubleValue);
+                }
+
+                changed = true;
+                type = 4;
+                return JsonValue.Create(ConvertJsonNodeToString(valueNode));
+            case 5:
+                if (TryNormalizeQuatNode(valueNode, out JsonObject quatNode, out bool quatChanged))
+                {
+                    changed = quatChanged;
+                    return quatNode;
+                }
+
+                changed = true;
+                type = 4;
+                return JsonValue.Create(ConvertJsonNodeToString(valueNode));
+            case 6:
+                if (TryNormalizeVec3Node(valueNode, out JsonObject vec3Node, out bool vec3Changed))
+                {
+                    changed = vec3Changed;
+                    return vec3Node;
+                }
+
+                changed = true;
+                type = 4;
+                return JsonValue.Create(ConvertJsonNodeToString(valueNode));
+            case 4:
+            case 7:
+            case 255:
+                if (valueNode is JsonValue scalar && scalar.TryGetValue<string>(out string? stringValue))
+                {
+                    return JsonValue.Create(stringValue ?? string.Empty);
+                }
+
+                changed = true;
+                return JsonValue.Create(ConvertJsonNodeToString(valueNode));
+            default:
+                changed = true;
+                type = 4;
+                return JsonValue.Create(ConvertJsonNodeToString(valueNode));
+        }
+    }
+
+    private static bool TryNormalizeQuatNode(JsonNode? node, out JsonObject result, out bool changed)
+    {
+        changed = false;
+        result = new JsonObject();
+        if (node is JsonObject obj &&
+            TryGetDoubleByName(obj, "w", out double w) &&
+            TryGetDoubleByName(obj, "x", out double x) &&
+            TryGetDoubleByName(obj, "y", out double y) &&
+            TryGetDoubleByName(obj, "z", out double z))
+        {
+            result["w"] = JsonValue.Create(w);
+            result["x"] = JsonValue.Create(x);
+            result["y"] = JsonValue.Create(y);
+            result["z"] = JsonValue.Create(z);
+            changed = !IsCanonicalQuatObject(obj, w, x, y, z);
+            return true;
+        }
+
+        if (node is JsonArray arr &&
+            arr.Count >= 4 &&
+            TryGetDoubleFromJsonNode(arr[0], out double aw) &&
+            TryGetDoubleFromJsonNode(arr[1], out double ax) &&
+            TryGetDoubleFromJsonNode(arr[2], out double ay) &&
+            TryGetDoubleFromJsonNode(arr[3], out double az))
+        {
+            result["w"] = JsonValue.Create(aw);
+            result["x"] = JsonValue.Create(ax);
+            result["y"] = JsonValue.Create(ay);
+            result["z"] = JsonValue.Create(az);
+            changed = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static long EstimateJsonBase64RequestBodyLength(long payloadBytes)
+    {
+        if (payloadBytes <= 0)
+        {
+            return 2;
+        }
+
+        long base64Length = ((payloadBytes + 2L) / 3L) * 4L;
+        return base64Length + 2L; // JSON string quotes.
+    }
+
+    private static bool TryNormalizeVec3Node(JsonNode? node, out JsonObject result, out bool changed)
+    {
+        changed = false;
+        result = new JsonObject();
+        if (node is JsonObject obj &&
+            TryGetDoubleByName(obj, "x", out double x) &&
+            TryGetDoubleByName(obj, "y", out double y) &&
+            TryGetDoubleByName(obj, "z", out double z))
+        {
+            result["x"] = JsonValue.Create(x);
+            result["y"] = JsonValue.Create(y);
+            result["z"] = JsonValue.Create(z);
+            changed = !IsCanonicalVec3Object(obj, x, y, z);
+            return true;
+        }
+
+        if (node is JsonArray arr &&
+            arr.Count >= 3 &&
+            TryGetDoubleFromJsonNode(arr[0], out double ax) &&
+            TryGetDoubleFromJsonNode(arr[1], out double ay) &&
+            TryGetDoubleFromJsonNode(arr[2], out double az))
+        {
+            result["x"] = JsonValue.Create(ax);
+            result["y"] = JsonValue.Create(ay);
+            result["z"] = JsonValue.Create(az);
+            changed = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsCanonicalQuatObject(JsonObject obj, double w, double x, double y, double z)
+    {
+        if (obj.Count != 4)
+        {
+            return false;
+        }
+
+        return string.Equals(obj.ElementAt(0).Key, "w", StringComparison.Ordinal) &&
+               string.Equals(obj.ElementAt(1).Key, "x", StringComparison.Ordinal) &&
+               string.Equals(obj.ElementAt(2).Key, "y", StringComparison.Ordinal) &&
+               string.Equals(obj.ElementAt(3).Key, "z", StringComparison.Ordinal) &&
+               TryGetDoubleFromJsonNode(obj.ElementAt(0).Value, out double cw) && Math.Abs(cw - w) < 1e-9 &&
+               TryGetDoubleFromJsonNode(obj.ElementAt(1).Value, out double cx) && Math.Abs(cx - x) < 1e-9 &&
+               TryGetDoubleFromJsonNode(obj.ElementAt(2).Value, out double cy) && Math.Abs(cy - y) < 1e-9 &&
+               TryGetDoubleFromJsonNode(obj.ElementAt(3).Value, out double cz) && Math.Abs(cz - z) < 1e-9;
+    }
+
+    private static bool IsCanonicalVec3Object(JsonObject obj, double x, double y, double z)
+    {
+        if (obj.Count != 3)
+        {
+            return false;
+        }
+
+        return string.Equals(obj.ElementAt(0).Key, "x", StringComparison.Ordinal) &&
+               string.Equals(obj.ElementAt(1).Key, "y", StringComparison.Ordinal) &&
+               string.Equals(obj.ElementAt(2).Key, "z", StringComparison.Ordinal) &&
+               TryGetDoubleFromJsonNode(obj.ElementAt(0).Value, out double cx) && Math.Abs(cx - x) < 1e-9 &&
+               TryGetDoubleFromJsonNode(obj.ElementAt(1).Value, out double cy) && Math.Abs(cy - y) < 1e-9 &&
+               TryGetDoubleFromJsonNode(obj.ElementAt(2).Value, out double cz) && Math.Abs(cz - z) < 1e-9;
+    }
+
+    private static bool TryGetDoubleByName(JsonObject obj, string name, out double value)
+    {
+        if (TryGetJsonPropertyIgnoreCase(obj, name, out _, out JsonNode? node) &&
+            TryGetDoubleFromJsonNode(node, out value))
+        {
+            return true;
+        }
+
+        value = 0d;
+        return false;
+    }
+
+    private static bool TryGetIntFromJsonNode(JsonNode? node, out int value)
+    {
+        value = 0;
+        if (node is not JsonValue scalar)
+        {
+            return false;
+        }
+
+        if (scalar.TryGetValue<int>(out int i))
+        {
+            value = i;
+            return true;
+        }
+
+        if (scalar.TryGetValue<long>(out long l) && l >= int.MinValue && l <= int.MaxValue)
+        {
+            value = (int)l;
+            return true;
+        }
+
+        if (scalar.TryGetValue<string>(out string? s) &&
+            int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetLongFromJsonNode(JsonNode? node, out long value)
+    {
+        value = 0L;
+        if (node is not JsonValue scalar)
+        {
+            return false;
+        }
+
+        if (scalar.TryGetValue<long>(out long l))
+        {
+            value = l;
+            return true;
+        }
+
+        if (scalar.TryGetValue<int>(out int i))
+        {
+            value = i;
+            return true;
+        }
+
+        if (scalar.TryGetValue<double>(out double d) && Math.Abs(d % 1d) < 1e-9 &&
+            d >= long.MinValue && d <= long.MaxValue)
+        {
+            value = (long)d;
+            return true;
+        }
+
+        if (scalar.TryGetValue<bool>(out bool b))
+        {
+            value = b ? 1L : 0L;
+            return true;
+        }
+
+        if (scalar.TryGetValue<string>(out string? s) &&
+            long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetDoubleFromJsonNode(JsonNode? node, out double value)
+    {
+        value = 0d;
+        if (node is not JsonValue scalar)
+        {
+            return false;
+        }
+
+        if (scalar.TryGetValue<double>(out double d))
+        {
+            value = d;
+            return true;
+        }
+
+        if (scalar.TryGetValue<long>(out long l))
+        {
+            value = l;
+            return true;
+        }
+
+        if (scalar.TryGetValue<int>(out int i))
+        {
+            value = i;
+            return true;
+        }
+
+        if (scalar.TryGetValue<bool>(out bool b))
+        {
+            value = b ? 1d : 0d;
+            return true;
+        }
+
+        if (scalar.TryGetValue<string>(out string? s) &&
+            double.TryParse(s, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out double parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetBoolFromJsonNode(JsonNode? node, out bool value)
+    {
+        value = false;
+        if (node is not JsonValue scalar)
+        {
+            return false;
+        }
+
+        if (scalar.TryGetValue<bool>(out bool b))
+        {
+            value = b;
+            return true;
+        }
+
+        if (scalar.TryGetValue<long>(out long l))
+        {
+            value = l != 0L;
+            return true;
+        }
+
+        if (scalar.TryGetValue<double>(out double d))
+        {
+            value = Math.Abs(d) > double.Epsilon;
+            return true;
+        }
+
+        if (scalar.TryGetValue<string>(out string? s))
+        {
+            if (bool.TryParse(s, out bool parsedBool))
+            {
+                value = parsedBool;
+                return true;
+            }
+
+            if (long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsedLong))
+            {
+                value = parsedLong != 0L;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsNodeBoolean(JsonNode? node, bool value)
+    {
+        return node is JsonValue scalar && scalar.TryGetValue<bool>(out bool existing) && existing == value;
+    }
+
+    private static bool IsNodeInteger(JsonNode? node, long value)
+    {
+        return node is JsonValue scalar && scalar.TryGetValue<long>(out long existing) && existing == value;
+    }
+
+    private static bool IsNodeDouble(JsonNode? node, double value)
+    {
+        if (node is not JsonValue scalar)
+        {
+            return false;
+        }
+
+        if (scalar.TryGetValue<double>(out double existing))
+        {
+            return Math.Abs(existing - value) < 1e-12;
+        }
+
+        if (scalar.TryGetValue<long>(out long existingLong))
+        {
+            return Math.Abs(existingLong - value) < 1e-12;
+        }
+
+        return false;
+    }
+
+    private static string ConvertJsonNodeToString(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return string.Empty;
+        }
+
+        if (node is JsonValue scalar)
+        {
+            if (scalar.TryGetValue<string>(out string? s))
+            {
+                return s ?? string.Empty;
+            }
+
+            if (scalar.TryGetValue<bool>(out bool b))
+            {
+                return b ? "true" : "false";
+            }
+
+            if (scalar.TryGetValue<long>(out long l))
+            {
+                return l.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (scalar.TryGetValue<double>(out double d))
+            {
+                return d.ToString("R", CultureInfo.InvariantCulture);
+            }
+        }
+
+        return node.ToJsonString();
+    }
+
+    private static bool ApplyCreatorOverrideToBlueprintPayload(
+        JsonNode root,
+        ulong creatorPlayerId,
+        ulong creatorOrganizationId,
+        out string note)
+    {
+        note = string.Empty;
+        if (creatorPlayerId == 0UL && creatorOrganizationId == 0UL)
+        {
+            return false;
+        }
+
+        if (root is not JsonObject rootObject ||
+            !TryGetJsonPropertyIgnoreCase(rootObject, "model", out string modelKey, out JsonNode? modelNode))
+        {
+            note =
+                "creator override requested but no blueprint model was found; endpoint query uses configured creator ids.";
+            return true;
+        }
+
+        JsonObject modelObject = modelNode as JsonObject ?? new JsonObject();
+        if (modelNode is not JsonObject)
+        {
+            rootObject[modelKey] = modelObject;
+        }
+
+        SetJsonPropertyCaseAware(
+            modelObject,
+            "CreatorId",
+            JsonValue.Create(creatorPlayerId == 0UL ? 2UL : creatorPlayerId));
+
+        JsonObject jsonPropertiesObject = GetOrCreateJsonObjectProperty(modelObject, "JsonProperties");
+        JsonObject serverPropertiesObject = GetOrCreateJsonObjectProperty(jsonPropertiesObject, "serverProperties");
+
+        JsonObject creatorIdObject = GetOrCreateJsonObjectProperty(serverPropertiesObject, "creatorId");
+        SetJsonPropertyCaseAware(creatorIdObject, "playerId", JsonValue.Create(creatorPlayerId));
+        SetJsonPropertyCaseAware(creatorIdObject, "organizationId", JsonValue.Create(creatorOrganizationId));
+
+        note =
+            $"applied creator override in payload (playerId={creatorPlayerId.ToString(CultureInfo.InvariantCulture)}, " +
+            $"organizationId={creatorOrganizationId.ToString(CultureInfo.InvariantCulture)})";
+        return true;
+    }
+
+    private static JsonObject GetOrCreateJsonObjectProperty(JsonObject owner, string propertyName)
+    {
+        if (TryGetJsonPropertyIgnoreCase(owner, propertyName, out string actualName, out JsonNode? value))
+        {
+            if (value is JsonObject existingObject)
+            {
+                return existingObject;
+            }
+
+            var replacement = new JsonObject();
+            owner[actualName] = replacement;
+            return replacement;
+        }
+
+        var created = new JsonObject();
+        owner[propertyName] = created;
+        return created;
+    }
+
+    private static void SetJsonPropertyCaseAware(JsonObject owner, string propertyName, JsonNode? value)
+    {
+        if (TryGetJsonPropertyIgnoreCase(owner, propertyName, out string actualName, out _))
+        {
+            owner[actualName] = value;
+            return;
+        }
+
+        owner[propertyName] = value;
+    }
+
+    private static bool TryGetJsonPropertyIgnoreCase(
+        JsonObject obj,
+        string propertyName,
+        out string actualName,
+        out JsonNode? value)
+    {
+        foreach (KeyValuePair<string, JsonNode?> kvp in obj)
+        {
+            if (string.Equals(kvp.Key, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                actualName = kvp.Key;
+                value = kvp.Value;
+                return true;
+            }
+        }
+
+        actualName = string.Empty;
+        value = null;
+        return false;
+    }
+
+    private static bool TryReadJsonString(JsonNode? node, out string value)
+    {
+        value = string.Empty;
+        if (node is JsonValue scalar && scalar.TryGetValue<string>(out string? stringValue) &&
+            !string.IsNullOrWhiteSpace(stringValue))
+        {
+            value = stringValue;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string BuildSingleLineExceptionPreview(Exception ex)
+    {
+        string message = ex.Message ?? string.Empty;
+        message = message.Replace("\r", " ").Replace("\n", " ").Trim();
+        if (message.Length <= 220)
+        {
+            return message;
+        }
+
+        return message[..217] + "...";
+    }
+
+    private static bool IsConnectionResetException(HttpRequestException ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is SocketException socketException)
+            {
+                if (socketException.SocketErrorCode == SocketError.ConnectionReset ||
+                    socketException.SocketErrorCode == SocketError.ConnectionAborted)
+                {
+                    return true;
+                }
+            }
+
+            if (current is IOException ioException &&
+                ioException.Message.Contains("closed", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsConnectionRefusedException(HttpRequestException ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is SocketException socketException &&
+                socketException.SocketErrorCode == SocketError.ConnectionRefused)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ShouldAttemptTransportRecovery(HttpRequestException ex)
+    {
+        return IsConnectionResetException(ex) || IsConnectionRefusedException(ex);
+    }
+
+    private static async Task WaitForEndpointPortRecoveryAsync(
+        Uri endpoint,
+        TimeSpan maxWait,
+        CancellationToken cancellationToken)
+    {
+        DateTime startedAt = DateTime.UtcNow;
+        while (DateTime.UtcNow - startedAt < maxWait)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await CanConnectTcpAsync(endpoint.Host, endpoint.Port, cancellationToken))
+            {
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        }
+    }
+
+    private static async Task<bool> CanConnectTcpAsync(string host, int port, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            Task connectTask = client.ConnectAsync(host, port);
+            Task completed = await Task.WhenAny(connectTask, Task.Delay(TimeSpan.FromSeconds(1), cancellationToken));
+            if (!ReferenceEquals(completed, connectTask))
+            {
+                return false;
+            }
+
+            await connectTask;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string BuildTransportErrorPreview(HttpRequestException ex)
+    {
+        string message = ex.Message;
+        if (ex.InnerException is SocketException socketException)
+        {
+            return $"{message} (socket {(int)socketException.SocketErrorCode}: {socketException.SocketErrorCode})";
+        }
+
+        return message;
+    }
+
+    private static string GetPayloadKindDisplayName(ImportRequestPayloadKind payloadKind)
+    {
+        return payloadKind switch
+        {
+            ImportRequestPayloadKind.JsonBase64ByteArray => "json-base64-byte-array",
+            _ => payloadKind.ToString()
+        };
+    }
+
+    private enum ImportRequestPayloadKind
+    {
+        JsonBase64ByteArray
+    }
+
+    private static Uri BuildBlueprintImportEndpoint(
+        string endpointTemplate,
+        string? blueprintImportEndpoint,
+        ulong creatorPlayerId,
+        ulong creatorOrganizationId)
+    {
+        Uri baseUri;
+        if (!string.IsNullOrWhiteSpace(blueprintImportEndpoint))
+        {
+            string explicitCandidate = blueprintImportEndpoint.Trim()
+                .Replace("{id}", "0", StringComparison.OrdinalIgnoreCase);
+            if (!Uri.TryCreate(explicitCandidate, UriKind.Absolute, out Uri? parsedExplicitUri) || parsedExplicitUri is null)
+            {
+                throw new InvalidOperationException(
+                    $"Blueprint import endpoint is not a valid absolute URI: {blueprintImportEndpoint}");
+            }
+            baseUri = parsedExplicitUri;
+
+            if (string.IsNullOrWhiteSpace(baseUri.AbsolutePath) || baseUri.AbsolutePath == "/")
+            {
+                var explicitBuilder = new UriBuilder(baseUri)
+                {
+                    Path = "/blueprint/import"
+                };
+                baseUri = explicitBuilder.Uri;
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(endpointTemplate))
+            {
+                throw new InvalidOperationException(
+                    "Endpoint template is empty; cannot resolve blueprint import endpoint.");
+            }
+
+            string candidate = endpointTemplate.Trim()
+                .Replace("{id}", "0", StringComparison.OrdinalIgnoreCase);
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out Uri? parsedFallbackUri) || parsedFallbackUri is null)
+            {
+                throw new InvalidOperationException($"Endpoint template is not a valid absolute URI: {endpointTemplate}");
+            }
+            baseUri = parsedFallbackUri;
+
+            var fallbackBuilder = new UriBuilder(baseUri)
+            {
+                Path = "/blueprint/import"
+            };
+            baseUri = fallbackBuilder.Uri;
+        }
+
+        var builder = new UriBuilder(baseUri);
+        string existingQuery = string.IsNullOrWhiteSpace(builder.Query)
+            ? string.Empty
+            : builder.Query.TrimStart('?').Trim();
+        string appendQuery =
+            $"creatorPlayerId={creatorPlayerId.ToString(CultureInfo.InvariantCulture)}&" +
+            $"creatorOrganizationId={creatorOrganizationId.ToString(CultureInfo.InvariantCulture)}";
+        builder.Query = string.IsNullOrWhiteSpace(existingQuery)
+            ? appendQuery
+            : $"{existingQuery}&{appendQuery}";
+
+        return builder.Uri;
+    }
+
+    private static IReadOnlyList<Uri> BuildBlueprintImportEndpointCandidates(
+        string endpointTemplate,
+        string? blueprintImportEndpoint,
+        ulong creatorPlayerId,
+        ulong creatorOrganizationId)
+    {
+        Uri primary = BuildBlueprintImportEndpoint(
+            endpointTemplate,
+            blueprintImportEndpoint,
+            creatorPlayerId,
+            creatorOrganizationId);
+
+        var candidates = new List<Uri> { primary };
+
+        if (TryBuildGameplayServiceFallbackEndpoint(primary, out Uri? fallback) && fallback is not null)
+        {
+            candidates.Add(fallback);
+        }
+
+        // Add loopback host variants because some local installs bind only IPv4 or only IPv6.
+        int snapshotCount = candidates.Count;
+        for (int i = 0; i < snapshotCount; i++)
+        {
+            Uri candidate = candidates[i];
+            if (TryBuildLoopbackHostVariant(candidate, out Uri? loopbackVariant) && loopbackVariant is not null)
+            {
+                candidates.Add(loopbackVariant);
+            }
+        }
+
+        var deduplicated = new List<Uri>(candidates.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Uri candidate in candidates)
+        {
+            string key = candidate.AbsoluteUri;
+            if (seen.Add(key))
+            {
+                deduplicated.Add(candidate);
+            }
+        }
+
+        return deduplicated;
+    }
+
+    private static bool TryBuildLoopbackHostVariant(Uri source, out Uri? loopbackVariant)
+    {
+        loopbackVariant = null;
+        string host = source.Host;
+        if (!string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var builder = new UriBuilder(source)
+        {
+            Host = "127.0.0.1"
+        };
+        loopbackVariant = builder.Uri;
+        return true;
+    }
+
+    private static bool TryBuildGameplayServiceFallbackEndpoint(Uri primaryEndpoint, out Uri? fallbackEndpoint)
+    {
+        fallbackEndpoint = null;
+        if (primaryEndpoint is null)
+        {
+            return false;
+        }
+
+        if (primaryEndpoint.Port != 12003)
+        {
+            return false;
+        }
+
+        var builder = new UriBuilder(primaryEndpoint)
+        {
+            Port = 10111,
+            Path = "/blueprint/import"
+        };
+        fallbackEndpoint = builder.Uri;
+        return true;
+    }
+
+    private static ulong? TryParseBlueprintIdFromImportResponse(string? responseText)
+    {
+        return TryParseBlueprintIdFromImportResponse(responseText, null, null);
+    }
+
+    private static ulong? TryParseBlueprintIdFromImportResponse(
+        string? responseText,
+        byte[]? responseBytes,
+        string? responseMediaType)
+    {
+        if (!string.IsNullOrWhiteSpace(responseText))
+        {
+            string trimmed = responseText.Trim();
+            if (ulong.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong direct))
+            {
+                return NormalizeBlueprintId(direct);
+            }
+
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(trimmed);
+                JsonElement root = document.RootElement;
+
+                if (root.ValueKind == JsonValueKind.Number && root.TryGetUInt64(out ulong numericRoot))
+                {
+                    return NormalizeBlueprintId(numericRoot);
+                }
+
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    if (TryReadUInt64(root, "blueprintId", "BlueprintId", "id", "Id") is ulong id)
+                    {
+                        return NormalizeBlueprintId(id);
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        if (responseBytes is null || responseBytes.Length == 0)
+        {
+            return null;
+        }
+
+        if (!IsNovaquarkBinaryMediaType(responseMediaType))
+        {
+            return null;
+        }
+
+        if (!TryDecodeVarUInt64(responseBytes, out ulong rawValue))
+        {
+            return null;
+        }
+
+        // `application/vnd.novaquark.binary` responses carry a zig-zag encoded integer id.
+        return NormalizeBlueprintId(rawValue >> 1);
+    }
+
+    private static string BuildImportResponsePreview(byte[] responseBytes, string? responseMediaType)
+    {
+        if (responseBytes is null || responseBytes.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (IsNovaquarkBinaryMediaType(responseMediaType))
+        {
+            string hex = Convert.ToHexString(responseBytes);
+            if (TryDecodeVarUInt64(responseBytes, out ulong raw))
+            {
+                ulong decodedId = raw >> 1;
+                return $"binary(varint={raw.ToString(CultureInfo.InvariantCulture)}, decodedId={decodedId.ToString(CultureInfo.InvariantCulture)}, hex={hex})";
+            }
+
+            return $"binary(hex={hex})";
+        }
+
+        return DecodeResponseText(responseBytes);
+    }
+
+    private static string DecodeResponseText(byte[] responseBytes)
+    {
+        if (responseBytes is null || responseBytes.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        string utf8 = Encoding.UTF8.GetString(responseBytes);
+        if (utf8.IndexOf('\0') >= 0)
+        {
+            return Convert.ToBase64String(responseBytes);
+        }
+
+        return utf8;
+    }
+
+    private static bool IsNovaquarkBinaryMediaType(string? mediaType)
+    {
+        return !string.IsNullOrWhiteSpace(mediaType) &&
+               mediaType.Contains("application/vnd.novaquark.binary", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryDecodeVarUInt64(byte[] bytes, out ulong value)
+    {
+        value = 0UL;
+        if (bytes is null || bytes.Length == 0)
+        {
+            return false;
+        }
+
+        int shift = 0;
+        for (int i = 0; i < bytes.Length && i < 10; i++)
+        {
+            byte current = bytes[i];
+            value |= (ulong)(current & 0x7F) << shift;
+            if ((current & 0x80) == 0)
+            {
+                return true;
+            }
+
+            shift += 7;
+        }
+
+        value = 0UL;
+        return false;
+    }
+
+    private static string BuildHttpBodyPreview(string? responseText)
+    {
+        if (string.IsNullOrWhiteSpace(responseText))
+        {
+            return "empty response body";
+        }
+
+        string[] tokens = responseText
+            .Split(new[] {'\r', '\n', '\t'}, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        string singleLine = tokens.Length == 0 ? responseText.Trim() : string.Join(" ", tokens);
+        const int maxLength = 320;
+        if (singleLine.Length <= maxLength)
+        {
+            return singleLine;
+        }
+
+        return singleLine[..(maxLength - 3)] + "...";
+    }
+
+    private static BlueprintImportResult ParseBlueprintJsonLegacy(string jsonContent, string sourceName, string? serverRootPath)
+    {
+        using JsonDocument document = JsonDocument.Parse(jsonContent, CreateBlueprintJsonDocumentOptions());
+        return ParseBlueprintJsonLegacy(document.RootElement, sourceName, serverRootPath);
+    }
+
+    private static BlueprintImportResult ParseBlueprintJsonLegacy(Stream jsonStream, string sourceName, string? serverRootPath)
+    {
+        if (jsonStream is null)
+        {
+            throw new ArgumentNullException(nameof(jsonStream));
+        }
+
+        if (jsonStream.CanSeek && jsonStream.Position != 0L)
+        {
+            jsonStream.Seek(0L, SeekOrigin.Begin);
+        }
+
+        using JsonDocument document = JsonDocument.Parse(jsonStream, CreateBlueprintJsonDocumentOptions());
+        return ParseBlueprintJsonLegacy(document.RootElement, sourceName, serverRootPath);
+    }
+
+    private static BlueprintImportResult ParseBlueprintJsonLegacy(JsonElement root, string sourceName, string? serverRootPath)
+    {
         if (root.ValueKind != JsonValueKind.Object)
         {
             throw new InvalidOperationException("Blueprint root must be a JSON object.");
         }
 
         JsonElement model = default;
-        bool hasModel = root.TryGetProperty("Model", out model) && model.ValueKind == JsonValueKind.Object;
+        bool hasModel = TryGetPropertyIgnoreCase(root, "Model", out model) && model.ValueKind == JsonValueKind.Object;
         JsonElement elements = default;
-        bool hasElements = root.TryGetProperty("Elements", out elements) && elements.ValueKind == JsonValueKind.Array;
+        bool hasElements = TryGetPropertyIgnoreCase(root, "Elements", out elements) && elements.ValueKind == JsonValueKind.Array;
 
-        ulong? blueprintId = hasModel ? TryReadUInt64(model, "Id") : null;
-        string blueprintName = hasModel ? TryReadString(model, "Name") ?? string.Empty : string.Empty;
+        ulong? blueprintId = hasModel
+            ? NormalizeBlueprintId(TryReadUInt64(model, "Id", "id", "blueprintId", "blueprint_id"))
+            : null;
+        string blueprintName = hasModel ? TryReadString(model, "Name", "name") ?? string.Empty : string.Empty;
         if (string.IsNullOrWhiteSpace(blueprintName))
         {
             blueprintName = string.IsNullOrWhiteSpace(sourceName) ? "Blueprint import" : sourceName;
@@ -681,12 +3369,26 @@ public sealed class MyDuDataService
                 }
 
                 fallbackElementId++;
-                ulong elementId = TryReadUInt64(element, "elementId") ?? (ulong)fallbackElementId;
+                ulong elementId = TryReadUInt64(element, "elementId", "element_id", "id") ?? (ulong)fallbackElementId;
                 string elementDisplayName = BuildBlueprintElementDisplayName(element, elementId);
 
                 foreach (JsonProperty property in element.EnumerateObject())
                 {
-                    AddBlueprintPropertyRecord(records, elementId, elementDisplayName, property.Name, property.Value);
+                    if (string.Equals(property.Name, "properties", StringComparison.OrdinalIgnoreCase) &&
+                        property.Value.ValueKind == JsonValueKind.Array &&
+                        TryExpandBlueprintElementProperties(records, elementId, elementDisplayName, property.Value, serverRootPath))
+                    {
+                        continue;
+                    }
+
+                    AddBlueprintPropertyRecord(
+                        records,
+                        elementId,
+                        elementDisplayName,
+                        property.Name,
+                        property.Value,
+                        propertyTypeOverride: null,
+                        serverRootPath: serverRootPath);
                 }
 
                 elementCount++;
@@ -703,13 +3405,16 @@ public sealed class MyDuDataService
                     modelPseudoElementId,
                     "BlueprintModel [0]",
                     $"model.{property.Name}",
-                    property.Value);
+                    property.Value,
+                    propertyTypeOverride: null,
+                    serverRootPath: serverRootPath);
             }
         }
 
         foreach (JsonProperty property in root.EnumerateObject())
         {
-            if (property.NameEquals("Elements") || property.NameEquals("Model"))
+            if (string.Equals(property.Name, "Elements", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(property.Name, "Model", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -719,7 +3424,9 @@ public sealed class MyDuDataService
                 modelPseudoElementId,
                 "BlueprintRoot [0]",
                 $"root.{property.Name}",
-                property.Value);
+                property.Value,
+                propertyTypeOverride: null,
+                serverRootPath: serverRootPath);
         }
 
         if (records.Count == 0)
@@ -732,7 +3439,354 @@ public sealed class MyDuDataService
             blueprintName,
             blueprintId,
             elementCount,
-            records);
+            records,
+            string.Empty,
+            string.Empty);
+    }
+
+    private static JsonDocumentOptions CreateBlueprintJsonDocumentOptions()
+    {
+        return new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        };
+    }
+
+    private static string FormatByteLength(long length)
+    {
+        const double kib = 1024d;
+        const double mib = kib * 1024d;
+        const double gib = mib * 1024d;
+
+        if (length < kib)
+        {
+            return $"{length.ToString(CultureInfo.InvariantCulture)} B";
+        }
+
+        if (length < mib)
+        {
+            return $"{(length / kib).ToString("0.##", CultureInfo.InvariantCulture)} KiB";
+        }
+
+        if (length < gib)
+        {
+            return $"{(length / mib).ToString("0.##", CultureInfo.InvariantCulture)} MiB";
+        }
+
+        return $"{(length / gib).ToString("0.##", CultureInfo.InvariantCulture)} GiB";
+    }
+
+    private sealed record NqBlueprintProbe(
+        bool Success,
+        bool DllUnavailable,
+        string Message,
+        string DllPath,
+        ulong? BlueprintId,
+        string BlueprintName,
+        int ElementCount,
+        int LinkCount,
+        bool HasVoxelData);
+
+    private static NqBlueprintProbe ProbeBlueprintWithNqDll(
+        string jsonContent,
+        string? serverRootPath,
+        string? nqUtilsDllPath)
+    {
+        if (!TryResolveNqUtilsDllPath(serverRootPath, nqUtilsDllPath, out string dllPath, out string resolveMessage))
+        {
+            return new NqBlueprintProbe(
+                Success: false,
+                DllUnavailable: true,
+                Message: resolveMessage,
+                DllPath: string.Empty,
+                BlueprintId: null,
+                BlueprintName: string.Empty,
+                ElementCount: 0,
+                LinkCount: 0,
+                HasVoxelData: false);
+        }
+
+        try
+        {
+            Assembly nqAssembly = LoadNqUtilsAssembly(dllPath);
+            Type? blueprintType = nqAssembly.GetType("NQ.BlueprintData", throwOnError: false);
+            if (blueprintType is null)
+            {
+                return new NqBlueprintProbe(
+                    Success: false,
+                    DllUnavailable: false,
+                    Message: "Type NQ.BlueprintData was not found in NQutils.dll.",
+                    DllPath: dllPath,
+                    BlueprintId: null,
+                    BlueprintName: string.Empty,
+                    ElementCount: 0,
+                    LinkCount: 0,
+                    HasVoxelData: false);
+            }
+
+            object? blueprint = JsonConvert.DeserializeObject(jsonContent, blueprintType);
+            if (blueprint is null)
+            {
+                return new NqBlueprintProbe(
+                    Success: false,
+                    DllUnavailable: false,
+                    Message: "JsonConvert returned null when deserializing NQ.BlueprintData.",
+                    DllPath: dllPath,
+                    BlueprintId: null,
+                    BlueprintName: string.Empty,
+                    ElementCount: 0,
+                    LinkCount: 0,
+                    HasVoxelData: false);
+            }
+
+            object? model = GetObjectProperty(blueprint, "Model");
+            if (model is null)
+            {
+                return new NqBlueprintProbe(
+                    Success: false,
+                    DllUnavailable: false,
+                    Message: "NQ.BlueprintData.Model is null after deserialization.",
+                    DllPath: dllPath,
+                    BlueprintId: null,
+                    BlueprintName: string.Empty,
+                    ElementCount: 0,
+                    LinkCount: 0,
+                    HasVoxelData: GetObjectProperty(blueprint, "VoxelData") is not null);
+            }
+
+            ulong? blueprintId = NormalizeBlueprintId(TryConvertToUInt64(GetObjectProperty(model, "Id")));
+            string blueprintName = Convert.ToString(GetObjectProperty(model, "Name"), CultureInfo.InvariantCulture) ?? string.Empty;
+            int elementCount = CountEnumerable(GetObjectProperty(blueprint, "Elements"));
+            int linkCount = CountEnumerable(GetObjectProperty(blueprint, "Links"));
+            bool hasVoxelData = GetObjectProperty(blueprint, "VoxelData") is not null;
+
+            return new NqBlueprintProbe(
+                Success: true,
+                DllUnavailable: false,
+                Message: "Validated with NQutils.dll.",
+                DllPath: dllPath,
+                BlueprintId: blueprintId,
+                BlueprintName: blueprintName,
+                ElementCount: elementCount,
+                LinkCount: linkCount,
+                HasVoxelData: hasVoxelData);
+        }
+        catch (Exception ex)
+        {
+            return new NqBlueprintProbe(
+                Success: false,
+                DllUnavailable: false,
+                Message: BuildNqPreflightWarningMessage(ex),
+                DllPath: dllPath,
+                BlueprintId: null,
+                BlueprintName: string.Empty,
+                ElementCount: 0,
+                LinkCount: 0,
+                HasVoxelData: false);
+        }
+    }
+
+    private static string BuildNqPreflightWarningMessage(Exception ex)
+    {
+        if (ex is JsonSerializationException jsonEx)
+        {
+            string path = string.IsNullOrWhiteSpace(jsonEx.Path) ? "<unknown>" : jsonEx.Path;
+            string line = jsonEx.LineNumber > 0 ? jsonEx.LineNumber.ToString(CultureInfo.InvariantCulture) : "?";
+            string position = jsonEx.LinePosition > 0 ? jsonEx.LinePosition.ToString(CultureInfo.InvariantCulture) : "?";
+
+            if (path.Contains("serverProperties", StringComparison.OrdinalIgnoreCase))
+            {
+                return
+                    $"Schema mismatch at '{path}' (line {line}, position {position}): " +
+                    "serverProperties is an array, but NQ preflight expects an object dictionary.";
+            }
+
+            return $"Schema mismatch at '{path}' (line {line}, position {position}): {ExtractFirstSentence(jsonEx.Message)}";
+        }
+
+        return ExtractFirstSentence(ex.Message);
+    }
+
+    private static string ExtractFirstSentence(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return "unknown preflight error";
+        }
+
+        string flattened = message.Replace("\r", " ").Replace("\n", " ").Trim();
+        int periodIndex = flattened.IndexOf('.', StringComparison.Ordinal);
+        if (periodIndex > 0 && periodIndex < flattened.Length - 1)
+        {
+            return flattened[..(periodIndex + 1)].Trim();
+        }
+
+        const int maxLength = 280;
+        if (flattened.Length <= maxLength)
+        {
+            return flattened;
+        }
+
+        return flattened[..(maxLength - 3)] + "...";
+    }
+
+    private static bool TryResolveNqUtilsDllPath(
+        string? serverRootPath,
+        string? nqUtilsDllPath,
+        out string dllPath,
+        out string message)
+    {
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(nqUtilsDllPath))
+        {
+            candidates.Add(nqUtilsDllPath);
+        }
+
+        string? pathFromEnv = Environment.GetEnvironmentVariable("MYDU_NQUTILS_DLL_PATH");
+        if (!string.IsNullOrWhiteSpace(pathFromEnv))
+        {
+            candidates.Add(pathFromEnv);
+        }
+
+        string? dirFromEnv = Environment.GetEnvironmentVariable("MYDU_NQUTILS_DLL_DIR");
+        if (!string.IsNullOrWhiteSpace(dirFromEnv))
+        {
+            candidates.Add(Path.Combine(dirFromEnv, "NQutils.dll"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(serverRootPath))
+        {
+            candidates.Add(Path.Combine(serverRootPath, "wincs", "all", "NQutils.dll"));
+        }
+
+        candidates.AddRange(DefaultNqUtilsDllPaths);
+
+        foreach (string candidate in candidates.Where(path => !string.IsNullOrWhiteSpace(path)))
+        {
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(candidate);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (File.Exists(fullPath))
+            {
+                dllPath = fullPath;
+                message = string.Empty;
+                return true;
+            }
+        }
+
+        dllPath = string.Empty;
+        message =
+            "NQutils.dll not found. Configure an explicit NQutils.dll path in the Config tab, " +
+            "or set MYDU_NQUTILS_DLL_PATH / MYDU_NQUTILS_DLL_DIR, " +
+            "or point Server Root Path to your myDU server folder.";
+        return false;
+    }
+
+    private static Assembly LoadNqUtilsAssembly(string dllPath)
+    {
+        string fullPath = Path.GetFullPath(dllPath);
+        Assembly? loaded = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a =>
+            {
+                try
+                {
+                    string location = a.Location ?? string.Empty;
+                    return location.Length > 0 &&
+                           string.Equals(Path.GetFullPath(location), fullPath, StringComparison.OrdinalIgnoreCase);
+                }
+                catch
+                {
+                    return false;
+                }
+            });
+
+        return loaded ?? Assembly.LoadFrom(fullPath);
+    }
+
+    private static object? GetObjectProperty(object target, string propertyName)
+    {
+        if (target is null)
+        {
+            return null;
+        }
+
+        PropertyInfo? property = target.GetType().GetProperty(
+            propertyName,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+
+        return property?.GetValue(target);
+    }
+
+    private static int CountEnumerable(object? value)
+    {
+        if (value is null)
+        {
+            return 0;
+        }
+
+        if (value is ICollection collection)
+        {
+            return collection.Count;
+        }
+
+        if (value is IEnumerable enumerable)
+        {
+            int count = 0;
+            foreach (object? _ in enumerable)
+            {
+                count++;
+            }
+
+            return count;
+        }
+
+        return 0;
+    }
+
+    private static ulong? TryConvertToUInt64(object? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (value is ulong u)
+        {
+            return u;
+        }
+
+        if (value is long l && l >= 0)
+        {
+            return (ulong)l;
+        }
+
+        if (value is int i && i >= 0)
+        {
+            return (ulong)i;
+        }
+
+        return ulong.TryParse(
+            Convert.ToString(value, CultureInfo.InvariantCulture),
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out ulong parsed)
+            ? parsed
+            : null;
+    }
+
+    private static ulong? NormalizeBlueprintId(ulong? blueprintId)
+    {
+        return blueprintId.HasValue && blueprintId.Value > 0UL
+            ? blueprintId
+            : null;
     }
 
     public async Task<EndpointProbeResult> ProbeEndpointAsync(
@@ -1263,11 +4317,12 @@ public sealed class MyDuDataService
 
     private static string BuildBlueprintElementDisplayName(JsonElement element, ulong elementId)
     {
-        ulong? localId = TryReadUInt64(element, "localId");
+        ulong? localId = TryReadUInt64(element, "localId", "local_id");
         ulong displayId = localId ?? elementId;
 
         string typeLabel = "BlueprintElement";
-        if (element.TryGetProperty("elementType", out JsonElement elementType))
+        if (TryGetPropertyIgnoreCase(element, "elementType", out JsonElement elementType) ||
+            TryGetPropertyIgnoreCase(element, "type", out elementType))
         {
             string token = BuildScalarToken(elementType);
             if (!string.IsNullOrWhiteSpace(token))
@@ -1284,11 +4339,26 @@ public sealed class MyDuDataService
         ulong elementId,
         string elementDisplayName,
         string propertyName,
-        JsonElement value)
+        JsonElement value,
+        int? propertyTypeOverride = null,
+        string? serverRootPath = null)
     {
+        int propertyType = propertyTypeOverride ?? InferBlueprintPropertyType(value);
         string decodedValue = RenderBlueprintJsonValue(value);
-        int propertyType = InferBlueprintPropertyType(value);
         int byteLength = Encoding.UTF8.GetByteCount(decodedValue);
+
+        if (TryDecodeBlueprintSpecialProperty(
+                propertyName,
+                value,
+                propertyType,
+                serverRootPath,
+                out string? decodedSpecialValue,
+                out int rawByteLength) &&
+            !string.IsNullOrWhiteSpace(decodedSpecialValue))
+        {
+            decodedValue = decodedSpecialValue;
+            byteLength = rawByteLength > 0 ? rawByteLength : Encoding.UTF8.GetByteCount(decodedValue);
+        }
 
         records.Add(new ElementPropertyRecord(
             elementId,
@@ -1297,6 +4367,207 @@ public sealed class MyDuDataService
             propertyType,
             decodedValue,
             byteLength));
+    }
+
+    private static bool TryExpandBlueprintElementProperties(
+        ICollection<ElementPropertyRecord> records,
+        ulong elementId,
+        string elementDisplayName,
+        JsonElement propertiesArray,
+        string? serverRootPath)
+    {
+        int added = 0;
+        foreach (JsonElement entry in propertiesArray.EnumerateArray())
+        {
+            if (!TryParseBlueprintPropertyEntry(entry, out string propertyName, out JsonElement propertyValue, out int? propertyType))
+            {
+                continue;
+            }
+
+            AddBlueprintPropertyRecord(
+                records,
+                elementId,
+                elementDisplayName,
+                propertyName,
+                propertyValue,
+                propertyType,
+                serverRootPath);
+            added++;
+        }
+
+        return added > 0;
+    }
+
+    private static bool TryParseBlueprintPropertyEntry(
+        JsonElement entry,
+        out string propertyName,
+        out JsonElement propertyValue,
+        out int? propertyType)
+    {
+        propertyName = string.Empty;
+        propertyValue = default;
+        propertyType = null;
+
+        if (entry.ValueKind == JsonValueKind.Array)
+        {
+            JsonElement[] parts = entry.EnumerateArray().ToArray();
+            if (parts.Length < 2)
+            {
+                return false;
+            }
+
+            propertyName = BuildScalarToken(parts[0]).Trim();
+            if (string.IsNullOrWhiteSpace(propertyName))
+            {
+                return false;
+            }
+
+            JsonElement payload = parts[1];
+            if (payload.ValueKind == JsonValueKind.Object &&
+                TryGetPropertyIgnoreCase(payload, "value", out JsonElement nestedValue))
+            {
+                propertyValue = nestedValue;
+                propertyType = TryReadInt32(payload, "type");
+            }
+            else
+            {
+                propertyValue = payload;
+            }
+
+            return true;
+        }
+
+        if (entry.ValueKind == JsonValueKind.Object)
+        {
+            string? name = TryReadString(entry, "name", "key", "property");
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            propertyName = name.Trim();
+            if (TryGetPropertyIgnoreCase(entry, "value", out JsonElement value))
+            {
+                propertyValue = value;
+                propertyType = TryReadInt32(entry, "type");
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int? TryReadInt32(JsonElement jsonObject, params string[] propertyNames)
+    {
+        if (jsonObject.ValueKind != JsonValueKind.Object || propertyNames is null || propertyNames.Length == 0)
+        {
+            return null;
+        }
+
+        foreach (string propertyName in propertyNames)
+        {
+            if (string.IsNullOrWhiteSpace(propertyName) ||
+                !TryGetPropertyIgnoreCase(jsonObject, propertyName, out JsonElement value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int numeric))
+            {
+                return numeric;
+            }
+
+            if (value.ValueKind == JsonValueKind.String &&
+                int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryDecodeBlueprintSpecialProperty(
+        string propertyName,
+        JsonElement value,
+        int propertyType,
+        string? serverRootPath,
+        out string decodedValue,
+        out int rawByteLength)
+    {
+        decodedValue = string.Empty;
+        rawByteLength = 0;
+
+        if (value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(propertyName))
+        {
+            return false;
+        }
+
+        if (!string.Equals(propertyName, "dpuyaml_6", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(propertyName, "content_2", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(propertyName, "databank", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string rawText = value.GetString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(rawText))
+        {
+            return false;
+        }
+
+        if (!TryDecodeBase64(rawText.Trim(), out byte[] rawBytes))
+        {
+            return false;
+        }
+
+        rawByteLength = rawBytes.Length;
+        string rootPath = serverRootPath ?? string.Empty;
+
+        if (string.Equals(propertyName, "dpuyaml_6", StringComparison.OrdinalIgnoreCase))
+        {
+            if (DpuLuaDecoder.TryDecode(rawBytes, rootPath, out DpuLuaDecodeResult? lua, out _) && lua is not null)
+            {
+                decodedValue = lua.DecodedText;
+                return true;
+            }
+
+            return false;
+        }
+
+        if (ContentBlobDecoder.TryDecode(rawBytes, rootPath, out ContentBlobDecodeResult? content, out _) &&
+            content is not null)
+        {
+            decodedValue = content.DecodedText;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryDecodeBase64(string text, out byte[] bytes)
+    {
+        bytes = Array.Empty<byte>();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        string trimmed = text.Trim();
+        int remainder = trimmed.Length % 4;
+        string padded = remainder == 0
+            ? trimmed
+            : trimmed + new string('=', 4 - remainder);
+
+        try
+        {
+            bytes = Convert.FromBase64String(padded);
+            return bytes.Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static int InferBlueprintPropertyType(JsonElement value)
@@ -1354,7 +4625,7 @@ public sealed class MyDuDataService
 
         if (length <= 8)
         {
-            string serialized = JsonSerializer.Serialize(value);
+            string serialized = System.Text.Json.JsonSerializer.Serialize(value);
             if (serialized.Length <= 1024)
             {
                 return serialized;
@@ -1366,7 +4637,7 @@ public sealed class MyDuDataService
 
     private static string RenderBlueprintObjectValue(JsonElement value)
     {
-        string serialized = JsonSerializer.Serialize(value);
+        string serialized = System.Text.Json.JsonSerializer.Serialize(value);
         if (serialized.Length <= 2048)
         {
             return serialized;
@@ -1383,42 +4654,89 @@ public sealed class MyDuDataService
         return $"object(keys={keyPreview}{suffix}; count={keyCount.ToString(CultureInfo.InvariantCulture)})";
     }
 
-    private static ulong? TryReadUInt64(JsonElement jsonObject, string propertyName)
+    private static bool TryGetPropertyIgnoreCase(
+        JsonElement jsonObject,
+        string propertyName,
+        out JsonElement value)
     {
-        if (jsonObject.ValueKind != JsonValueKind.Object ||
-            !jsonObject.TryGetProperty(propertyName, out JsonElement value))
+        if (jsonObject.ValueKind != JsonValueKind.Object)
+        {
+            value = default;
+            return false;
+        }
+
+        if (jsonObject.TryGetProperty(propertyName, out value))
+        {
+            return true;
+        }
+
+        foreach (JsonProperty property in jsonObject.EnumerateObject())
+        {
+            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static ulong? TryReadUInt64(JsonElement jsonObject, params string[] propertyNames)
+    {
+        if (jsonObject.ValueKind != JsonValueKind.Object || propertyNames is null || propertyNames.Length == 0)
         {
             return null;
         }
 
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetUInt64(out ulong numeric))
+        foreach (string propertyName in propertyNames)
         {
-            return numeric;
-        }
+            if (string.IsNullOrWhiteSpace(propertyName) ||
+                !TryGetPropertyIgnoreCase(jsonObject, propertyName, out JsonElement value))
+            {
+                continue;
+            }
 
-        if (value.ValueKind == JsonValueKind.String &&
-            ulong.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed))
-        {
-            return parsed;
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetUInt64(out ulong numeric))
+            {
+                return numeric;
+            }
+
+            if (value.ValueKind == JsonValueKind.String &&
+                ulong.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed))
+            {
+                return parsed;
+            }
         }
 
         return null;
     }
 
-    private static string? TryReadString(JsonElement jsonObject, string propertyName)
+    private static string? TryReadString(JsonElement jsonObject, params string[] propertyNames)
     {
-        if (jsonObject.ValueKind != JsonValueKind.Object ||
-            !jsonObject.TryGetProperty(propertyName, out JsonElement value))
+        if (jsonObject.ValueKind != JsonValueKind.Object || propertyNames is null || propertyNames.Length == 0)
         {
             return null;
         }
 
-        return value.ValueKind switch
+        foreach (string propertyName in propertyNames)
         {
-            JsonValueKind.String => value.GetString(),
-            JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => value.GetRawText(),
-            _ => null
-        };
+            if (string.IsNullOrWhiteSpace(propertyName) ||
+                !TryGetPropertyIgnoreCase(jsonObject, propertyName, out JsonElement value))
+            {
+                continue;
+            }
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => value.GetRawText(),
+                _ => null
+            };
+        }
+
+        return null;
     }
 
     private static string BuildScalarToken(JsonElement value)

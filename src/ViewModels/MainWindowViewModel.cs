@@ -16,6 +16,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -43,6 +44,7 @@ public partial class MainWindowViewModel : ViewModelBase
         string ElementTypeFilterInput,
         bool DamagedOnly,
         Dictionary<string, bool> PropertyStates);
+    private readonly record struct TreeBuildProgress(int ProcessedElements, int TotalElements);
 
     private readonly MyDuDataService _dataService = new();
     private readonly WorkbenchSettingsService _settingsService = new();
@@ -116,6 +118,12 @@ public partial class MainWindowViewModel : ViewModelBase
     private string serverRootPathInput = @"D:\MyDUserver";
 
     [ObservableProperty]
+    private string nqUtilsDllPathInput = string.Empty;
+
+    [ObservableProperty]
+    private string blueprintImportEndpointInput = string.Empty;
+
+    [ObservableProperty]
     private string dbPortInput = "5432";
 
     [ObservableProperty]
@@ -129,6 +137,18 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private string propertyLimitInput = "300";
+
+    [ObservableProperty]
+    private bool blueprintImportDryRunMode;
+
+    [ObservableProperty]
+    private bool blueprintImportIntoApp = true;
+
+    [ObservableProperty]
+    private bool blueprintImportIntoGameDatabase;
+
+    [ObservableProperty]
+    private bool blueprintImportAppendDateIfExists;
 
     [ObservableProperty]
     private string elementTypeNameFilterInput = string.Empty;
@@ -168,6 +188,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private string statusMessage = "Checking database connection...";
+
+    [ObservableProperty]
+    private string lastBlueprintImportErrorDetails = string.Empty;
 
     [ObservableProperty]
     private string activeConstructName = string.Empty;
@@ -219,6 +242,15 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private string repairStatusText = "Repair: idle";
+
+    [ObservableProperty]
+    private bool blueprintImportInProgress;
+
+    [ObservableProperty]
+    private double blueprintImportProgressPercent;
+
+    [ObservableProperty]
+    private string blueprintImportProgressText = "Import: idle";
 
     public TextWrapping ContentTextWrapping => AutoWrapContent ? TextWrapping.Wrap : TextWrapping.NoWrap;
     public bool CanSaveSelectedLuaBlob => IsLuaSaveNode(ResolveSelectedTreeRow(SelectedDpuyaml6Node));
@@ -327,7 +359,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 ? snapshot.ConstructId.ToString(CultureInfo.InvariantCulture)
                 : snapshot.ConstructName;
             UpdateDatabaseSummary(snapshot);
-            ApplyLoadedPropertyCollections(snapshot.Properties);
+            await ApplyLoadedPropertyCollectionsAsync(snapshot.Properties, cancellationToken: cts.Token);
 
             StatusMessage = $"DB snapshot loaded for construct {snapshot.ConstructId}.";
         }
@@ -341,7 +373,68 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    public async Task ImportBlueprintJsonAsync(string jsonContent, string sourceName, CancellationToken cancellationToken = default)
+    public async Task ImportBlueprintJsonAsync(
+        string jsonContent,
+        string sourceName,
+        bool dryRunMode,
+        bool importIntoApp,
+        bool importIntoGameDatabase,
+        bool appendDateIfExists,
+        CancellationToken cancellationToken = default)
+    {
+        await ImportBlueprintCoreAsync(
+            dryRunMode,
+            importIntoApp,
+            importIntoGameDatabase,
+            () => _dataService.ParseBlueprintJson(jsonContent, sourceName, ServerRootPathInput, NqUtilsDllPathInput),
+            ct => _dataService.ImportBlueprintIntoGameDatabaseAsync(
+                jsonContent,
+                EndpointTemplateInput,
+                BlueprintImportEndpointInput,
+                ParseOptionalUnsignedOrDefault(PlayerIdInput),
+                creatorOrganizationId: 0UL,
+                appendDateIfExists,
+                BuildDbOptions(),
+                ct),
+            sourceName,
+            cancellationToken);
+    }
+
+    public async Task ImportBlueprintFileAsync(
+        string sourcePath,
+        bool dryRunMode,
+        bool importIntoApp,
+        bool importIntoGameDatabase,
+        bool appendDateIfExists,
+        CancellationToken cancellationToken = default)
+    {
+        string fullSourcePath = Path.GetFullPath(sourcePath);
+        await ImportBlueprintCoreAsync(
+            dryRunMode,
+            importIntoApp,
+            importIntoGameDatabase,
+            () => _dataService.ParseBlueprintJsonFile(fullSourcePath, fullSourcePath, ServerRootPathInput, NqUtilsDllPathInput),
+            ct => _dataService.ImportBlueprintFileIntoGameDatabaseAsync(
+                fullSourcePath,
+                EndpointTemplateInput,
+                BlueprintImportEndpointInput,
+                ParseOptionalUnsignedOrDefault(PlayerIdInput),
+                creatorOrganizationId: 0UL,
+                appendDateIfExists,
+                BuildDbOptions(),
+                ct),
+            fullSourcePath,
+            cancellationToken);
+    }
+
+    private async Task ImportBlueprintCoreAsync(
+        bool dryRunMode,
+        bool importIntoApp,
+        bool importIntoGameDatabase,
+        Func<BlueprintImportResult> importFactory,
+        Func<CancellationToken, Task<BlueprintGameDatabaseImportResult>>? gameDatabaseImportFactory,
+        string? sourcePathHint,
+        CancellationToken cancellationToken)
     {
         if (IsBusy)
         {
@@ -349,46 +442,388 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         ElementFilterSnapshot filterSnapshot = CaptureElementFilterSnapshot();
+        bool shouldApplyToApp = importIntoApp && !dryRunMode;
+        bool requestGameDatabaseImport = importIntoGameDatabase;
 
         try
         {
             IsBusy = true;
-            StatusMessage = "Importing blueprint JSON...";
+            BlueprintImportInProgress = true;
+            BlueprintImportProgressPercent = 0d;
+            BlueprintImportProgressText = "Import: preparing";
+            LastBlueprintImportErrorDetails = string.Empty;
+            StatusMessage = dryRunMode
+                ? "Validating blueprint JSON (dry run)..."
+                : "Importing blueprint JSON...";
 
-            ClearFiltersForBlueprintImport();
+            if (shouldApplyToApp)
+            {
+                ClearFiltersForBlueprintImport(applyFilter: false);
+            }
 
-            BlueprintImportResult importResult = await Task.Run(
-                () => _dataService.ParseBlueprintJson(jsonContent, sourceName),
-                cancellationToken);
+            SetBlueprintImportProgress(20d, "Import: parsing blueprint");
+            BlueprintImportResult importResult = await Task.Run(importFactory, cancellationToken);
+            SetBlueprintImportProgress(40d, "Import: parsed");
+            string importSourcePath = ResolveBlueprintImportSourcePath(sourcePathHint, importResult.SourceName);
 
-            _lastSnapshot = null;
-            OnPropertyChanged(nameof(CanRepairDestroyedElements));
+            string blueprintIdText = FormatBlueprintIdForDisplay(importResult.BlueprintId, "<none>");
+            BlueprintGameDatabaseImportResult? gameDatabaseImportResult = null;
 
-            ActiveConstructName = string.IsNullOrWhiteSpace(importResult.BlueprintName)
-                ? "Blueprint import"
-                : importResult.BlueprintName;
+            if (shouldApplyToApp)
+            {
+                SetBlueprintImportProgress(50d, "Import: resolving element names");
+                (IReadOnlyList<ElementPropertyRecord> enrichedProperties, int renamedCount) =
+                    await TryEnrichBlueprintElementDisplayNamesAsync(importResult.Properties, cancellationToken);
+                if (renamedCount > 0)
+                {
+                    importResult = importResult with { Properties = enrichedProperties };
+                }
 
-            ApplyLoadedPropertyCollections(importResult.Properties);
-            RestoreElementFilters(filterSnapshot);
-            UpdateBlueprintSummary(importResult);
+                _lastSnapshot = null;
+                OnPropertyChanged(nameof(CanRepairDestroyedElements));
 
-            string blueprintIdText = importResult.BlueprintId?.ToString(CultureInfo.InvariantCulture) ?? "<none>";
-            StatusMessage =
-                $"Blueprint imported: {importResult.ElementCount.ToString(CultureInfo.InvariantCulture)} elements, id={blueprintIdText}.";
+                ActiveConstructName = string.IsNullOrWhiteSpace(importResult.BlueprintName)
+                    ? "Blueprint import"
+                    : importResult.BlueprintName;
+
+                SetBlueprintImportProgress(60d, "Import: updating property trees");
+                await ApplyLoadedPropertyCollectionsAsync(
+                    importResult.Properties,
+                    cancellationToken,
+                    (percent, text) => SetBlueprintImportProgress(percent, text),
+                    buildFilteredView: false);
+                SetBlueprintImportProgress(88d, "Import: applying filters");
+                RestoreElementFilters(filterSnapshot, applyFilter: false);
+                await ApplyElementPropertyFilterAsync(
+                    cancellationToken,
+                    (percent, text) => SetBlueprintImportProgress(percent, text),
+                    progressStart: 88d,
+                    progressEnd: 98d);
+                UpdateBlueprintSummary(importResult);
+            }
+
+            if (requestGameDatabaseImport && !dryRunMode)
+            {
+                if (gameDatabaseImportFactory is null)
+                {
+                    throw new InvalidOperationException("Game DB import is not available for this blueprint source.");
+                }
+
+                SetBlueprintImportProgress(99d, "Import: writing to game database");
+                gameDatabaseImportResult = await gameDatabaseImportFactory(cancellationToken);
+                if (!NormalizeBlueprintId(importResult.BlueprintId).HasValue &&
+                    NormalizeBlueprintId(gameDatabaseImportResult.BlueprintId).HasValue)
+                {
+                    blueprintIdText = FormatBlueprintIdForDisplay(gameDatabaseImportResult.BlueprintId, "<none>");
+                }
+            }
+
+            string scope = shouldApplyToApp
+                ? "imported into app"
+                : "validated only";
+            if (dryRunMode)
+            {
+                scope += " (dry run)";
+            }
+
+            string message =
+                $"Blueprint {scope} ({importResult.ImportPipeline}): {importResult.ElementCount.ToString(CultureInfo.InvariantCulture)} elements, id={blueprintIdText}.";
+            if (requestGameDatabaseImport)
+            {
+                if (dryRunMode)
+                {
+                    message += " Game DB import skipped (dry run).";
+                }
+                else if (gameDatabaseImportResult is not null)
+                {
+                    string importedId = FormatBlueprintIdForDisplay(gameDatabaseImportResult.BlueprintId, "<unknown>");
+                    message +=
+                        $" Game DB import OK (HTTP {gameDatabaseImportResult.StatusCode}, imported blueprintId={importedId}).";
+                    if (!string.IsNullOrWhiteSpace(gameDatabaseImportResult.RequestNotes))
+                    {
+                        message += $" {gameDatabaseImportResult.RequestNotes}";
+                    }
+
+                    LastBlueprintImportErrorDetails =
+                        BuildBlueprintImportDetailsWithSource(
+                            importSourcePath,
+                            $"Game DB endpoint: {gameDatabaseImportResult.Endpoint}{Environment.NewLine}" +
+                            $"HTTP: {gameDatabaseImportResult.StatusCode}{Environment.NewLine}" +
+                            $"Response: {gameDatabaseImportResult.ResponseText}{Environment.NewLine}" +
+                            $"Request notes: {gameDatabaseImportResult.RequestNotes}");
+                }
+            }
+
+            AppendImportNotesToStatus(importResult, importSourcePath, ref message);
+            StatusMessage = message;
+            SetBlueprintImportProgress(100d, "Import: completed");
         }
         catch (OperationCanceledException)
         {
+            LastBlueprintImportErrorDetails = string.Empty;
             StatusMessage = "Blueprint import cancelled.";
         }
         catch (Exception ex)
         {
-            RestoreElementFilters(filterSnapshot);
+            if (shouldApplyToApp)
+            {
+                RestoreElementFilters(filterSnapshot, applyFilter: false);
+            }
+
+            string importSourcePath = ResolveBlueprintImportSourcePath(sourcePathHint);
+            LastBlueprintImportErrorDetails = BuildBlueprintImportDetailsWithSource(importSourcePath, ex.ToString());
             StatusMessage = $"Blueprint import failed: {ex.Message}";
         }
         finally
         {
             IsBusy = false;
+            BlueprintImportInProgress = false;
+            BlueprintImportProgressText = "Import: idle";
         }
+    }
+
+    public bool TryGetBlueprintImportErrorDetails(out string title, out string details)
+    {
+        const string failedPrefix = "Blueprint import failed:";
+        bool isFailure = !string.IsNullOrWhiteSpace(StatusMessage) &&
+            StatusMessage.StartsWith(failedPrefix, StringComparison.OrdinalIgnoreCase);
+        bool hasImportDetails =
+            !string.IsNullOrWhiteSpace(LastBlueprintImportErrorDetails) &&
+            !string.IsNullOrWhiteSpace(StatusMessage) &&
+            StatusMessage.StartsWith("Blueprint ", StringComparison.OrdinalIgnoreCase);
+        if (!isFailure && !hasImportDetails)
+        {
+            title = string.Empty;
+            details = string.Empty;
+            return false;
+        }
+
+        title = isFailure ? "Blueprint Import Error" : "Blueprint Import Details";
+        details = string.IsNullOrWhiteSpace(LastBlueprintImportErrorDetails)
+            ? StatusMessage
+            : LastBlueprintImportErrorDetails;
+        return true;
+    }
+
+    public void SetBlueprintImportError(Exception ex)
+    {
+        LastBlueprintImportErrorDetails = ex?.ToString() ?? string.Empty;
+        StatusMessage = $"Blueprint import failed: {ex?.Message ?? "unknown error"}";
+    }
+
+    private void SetBlueprintImportProgress(double percent, string text)
+    {
+        double clamped = percent < 0d ? 0d : percent > 100d ? 100d : percent;
+        BlueprintImportProgressPercent = clamped;
+        BlueprintImportProgressText = string.IsNullOrWhiteSpace(text) ? "Import: running" : text;
+    }
+
+    private async Task<(IReadOnlyList<ElementPropertyRecord> Records, int RenamedTypeCount)> TryEnrichBlueprintElementDisplayNamesAsync(
+        IReadOnlyList<ElementPropertyRecord> records,
+        CancellationToken cancellationToken)
+    {
+        if (!IsDatabaseOnline() || records.Count == 0)
+        {
+            return (records, 0);
+        }
+
+        Dictionary<ulong, ulong> elementTypeByElementId = ExtractElementTypeByElementId(records);
+        if (elementTypeByElementId.Count == 0)
+        {
+            return (records, 0);
+        }
+
+        DataConnectionOptions options;
+        try
+        {
+            options = BuildDbOptions();
+        }
+        catch
+        {
+            return (records, 0);
+        }
+
+        IReadOnlyDictionary<ulong, string> namesByTypeId;
+        try
+        {
+            namesByTypeId = await _dataService.GetItemDefinitionDisplayNamesAsync(
+                options,
+                elementTypeByElementId.Values.Distinct().ToArray(),
+                cancellationToken);
+        }
+        catch
+        {
+            return (records, 0);
+        }
+
+        if (namesByTypeId.Count == 0)
+        {
+            return (records, 0);
+        }
+
+        bool changed = false;
+        var renamedTypeIds = new HashSet<ulong>();
+        var enriched = new List<ElementPropertyRecord>(records.Count);
+        foreach (ElementPropertyRecord record in records)
+        {
+            if (!elementTypeByElementId.TryGetValue(record.ElementId, out ulong typeId) ||
+                !namesByTypeId.TryGetValue(typeId, out string? displayName) ||
+                string.IsNullOrWhiteSpace(displayName))
+            {
+                enriched.Add(record);
+                continue;
+            }
+
+            string replaced = ReplaceTypeTokenWithDisplayName(record.ElementDisplayName, displayName.Trim(), typeId);
+            if (string.Equals(replaced, record.ElementDisplayName, StringComparison.Ordinal))
+            {
+                enriched.Add(record);
+                continue;
+            }
+
+            changed = true;
+            renamedTypeIds.Add(typeId);
+            enriched.Add(record with { ElementDisplayName = replaced });
+        }
+
+        return changed ? (enriched, renamedTypeIds.Count) : (records, 0);
+    }
+
+    private static Dictionary<ulong, ulong> ExtractElementTypeByElementId(IReadOnlyList<ElementPropertyRecord> records)
+    {
+        var result = new Dictionary<ulong, ulong>();
+        foreach (ElementPropertyRecord record in records)
+        {
+            if (record.ElementId == 0UL ||
+                !string.Equals(record.Name, "elementType", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(record.DecodedValue))
+            {
+                continue;
+            }
+
+            string normalized = record.DecodedValue.Trim();
+            if (!ulong.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong typeId) ||
+                typeId == 0UL)
+            {
+                continue;
+            }
+
+            result[record.ElementId] = typeId;
+        }
+
+        return result;
+    }
+
+    private static string ReplaceTypeTokenWithDisplayName(string currentDisplayName, string typeDisplayName, ulong typeId)
+    {
+        if (string.IsNullOrWhiteSpace(currentDisplayName) || string.IsNullOrWhiteSpace(typeDisplayName))
+        {
+            return currentDisplayName;
+        }
+
+        string expectedPrefix = $"type_{typeId.ToString(CultureInfo.InvariantCulture)}";
+        if (!currentDisplayName.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return currentDisplayName;
+        }
+
+        string suffix = currentDisplayName[expectedPrefix.Length..];
+        return typeDisplayName + suffix;
+    }
+
+    private void AppendImportNotesToStatus(BlueprintImportResult importResult, string importSourcePath, ref string message)
+    {
+        if (string.IsNullOrWhiteSpace(importResult.ImportNotes))
+        {
+            return;
+        }
+
+        bool shouldSurfaceDetails =
+            importResult.ImportPipeline.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+            importResult.ImportPipeline.Contains("warning", StringComparison.OrdinalIgnoreCase) ||
+            importResult.ImportPipeline.Contains("skipped", StringComparison.OrdinalIgnoreCase) ||
+            importResult.ImportPipeline.Contains("unavailable", StringComparison.OrdinalIgnoreCase);
+        if (!shouldSurfaceDetails)
+        {
+            return;
+        }
+
+        LastBlueprintImportErrorDetails = BuildBlueprintImportDetailsWithSource(importSourcePath, importResult.ImportNotes);
+
+        string notePreview = BuildSingleLinePreview(importResult.ImportNotes, 240);
+        if (string.IsNullOrWhiteSpace(notePreview))
+        {
+            return;
+        }
+
+        message += $" Details: {notePreview}";
+    }
+
+    private static string ResolveBlueprintImportSourcePath(string? sourcePathHint, string? sourceName = null)
+    {
+        string candidate = string.IsNullOrWhiteSpace(sourcePathHint) ? sourceName ?? string.Empty : sourcePathHint;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return Path.GetFullPath(candidate);
+        }
+        catch
+        {
+            return candidate;
+        }
+    }
+
+    private static string BuildBlueprintImportDetailsWithSource(string sourcePath, string details)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath))
+        {
+            return details;
+        }
+
+        if (string.IsNullOrWhiteSpace(details))
+        {
+            return $"Blueprint file: {sourcePath}";
+        }
+
+        return $"Blueprint file: {sourcePath}{Environment.NewLine}{details}";
+    }
+
+    private static string BuildSingleLinePreview(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        string[] lines = value
+            .Split(new[] {"\r\n", "\n", "\r"}, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        string firstLine = lines.Length > 0 ? lines[0] : value.Trim();
+        if (firstLine.Length <= maxLength)
+        {
+            return firstLine;
+        }
+
+        int truncatedLength = Math.Max(1, maxLength - 3);
+        return firstLine[..truncatedLength] + "...";
+    }
+
+    private static ulong? NormalizeBlueprintId(ulong? blueprintId)
+    {
+        return blueprintId.HasValue && blueprintId.Value > 0UL
+            ? blueprintId
+            : null;
+    }
+
+    private static string FormatBlueprintIdForDisplay(ulong? blueprintId, string fallback)
+    {
+        ulong? normalized = NormalizeBlueprintId(blueprintId);
+        return normalized.HasValue
+            ? normalized.Value.ToString(CultureInfo.InvariantCulture)
+            : fallback;
     }
 
     [RelayCommand]
@@ -694,6 +1129,16 @@ public partial class MainWindowViewModel : ViewModelBase
             ServerRootPathInput = settings.ServerRootPathInput;
         }
 
+        if (!string.IsNullOrWhiteSpace(settings.NqUtilsDllPathInput))
+        {
+            NqUtilsDllPathInput = settings.NqUtilsDllPathInput;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.BlueprintImportEndpointInput))
+        {
+            BlueprintImportEndpointInput = settings.BlueprintImportEndpointInput;
+        }
+
         if (!string.IsNullOrWhiteSpace(settings.DbPortInput))
         {
             DbPortInput = settings.DbPortInput;
@@ -718,6 +1163,8 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             PropertyLimitInput = settings.PropertyLimitInput;
         }
+
+        BlueprintImportAppendDateIfExists = settings.BlueprintImportAppendDateIfExists;
 
         ElementTypeNameFilterInput = settings.ElementTypeNameFilterInput ?? string.Empty;
         ElementTypeFilterHistory.Clear();
@@ -790,11 +1237,14 @@ public partial class MainWindowViewModel : ViewModelBase
             EndpointTemplateInput = EndpointTemplateInput,
             DbHostInput = DbHostInput,
             ServerRootPathInput = ServerRootPathInput,
+            NqUtilsDllPathInput = NqUtilsDllPathInput,
+            BlueprintImportEndpointInput = BlueprintImportEndpointInput,
             DbPortInput = DbPortInput,
             DbNameInput = DbNameInput,
             DbUserInput = DbUserInput,
             DbPassword = DbPasswordInput,
             PropertyLimitInput = PropertyLimitInput,
+            BlueprintImportAppendDateIfExists = BlueprintImportAppendDateIfExists,
             ElementTypeNameFilterInput = ElementTypeNameFilterInput,
             ElementTypeFilterHistory = ElementTypeFilterHistory.ToList(),
             AutoLoadOnStartup = AutoLoadOnStartup,
@@ -1108,6 +1558,18 @@ public partial class MainWindowViewModel : ViewModelBase
             : throw new InvalidOperationException($"Invalid unsigned integer value: {input}");
     }
 
+    private static ulong ParseOptionalUnsignedOrDefault(string? input, ulong fallback = 0UL)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return fallback;
+        }
+
+        return ulong.TryParse(input.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed)
+            ? parsed
+            : fallback;
+    }
+
     private static Uri BuildEndpointUri(string template, ulong constructId)
     {
         if (string.IsNullOrWhiteSpace(template))
@@ -1334,12 +1796,18 @@ public partial class MainWindowViewModel : ViewModelBase
         HashSet<ulong>? damagedElementIds = DamagedOnly
             ? BuildDamagedElementIdSet(_allRegularProperties)
             : null;
+        IReadOnlyDictionary<ulong, string>? elementNameById = string.IsNullOrWhiteSpace(elementTypeFilter)
+            ? null
+            : BuildElementNameById(_allRegularProperties);
 
         List<ElementPropertyRecord> filtered = _allRegularProperties
             .Where(r => !IsElementNameProperty(r.Name) &&
                         activeNames.Contains(NormalizePropertyName(r.Name)) &&
                         (damagedElementIds is null || damagedElementIds.Contains(r.ElementId)) &&
-                        MatchesElementTypeFilter(DeriveElementTypeName(r.ElementDisplayName), elementTypeFilter))
+                        MatchesElementTypeOrNameFilter(
+                            DeriveElementTypeName(r.ElementDisplayName),
+                            ResolveElementName(r.ElementId, elementNameById),
+                            elementTypeFilter))
             .ToList();
 
         ElementProperties.Clear();
@@ -1350,6 +1818,80 @@ public partial class MainWindowViewModel : ViewModelBase
 
         RebuildElementPropertiesTree(_allRegularProperties, activeNames, elementTypeFilter, damagedElementIds);
         SelectedElementPropertyNode = FindNodeBySelectionKey(ElementPropertiesModel, _selectedElementNodeKey);
+    }
+
+    private async Task ApplyElementPropertyFilterAsync(
+        CancellationToken cancellationToken,
+        Action<double, string>? progressUpdate,
+        double progressStart,
+        double progressEnd)
+    {
+        HashSet<string> activeNames = BuildActivePropertyNameSet();
+        string elementTypeFilter = ElementTypeNameFilterInput?.Trim() ?? string.Empty;
+        HashSet<ulong>? damagedElementIds = DamagedOnly
+            ? BuildDamagedElementIdSet(_allRegularProperties)
+            : null;
+        IReadOnlyDictionary<ulong, string>? elementNameById = string.IsNullOrWhiteSpace(elementTypeFilter)
+            ? null
+            : BuildElementNameById(_allRegularProperties);
+
+        List<ElementPropertyRecord> filtered = _allRegularProperties
+            .Where(r => !IsElementNameProperty(r.Name) &&
+                        activeNames.Contains(NormalizePropertyName(r.Name)) &&
+                        (damagedElementIds is null || damagedElementIds.Contains(r.ElementId)) &&
+                        MatchesElementTypeOrNameFilter(
+                            DeriveElementTypeName(r.ElementDisplayName),
+                            ResolveElementName(r.ElementId, elementNameById),
+                            elementTypeFilter))
+            .ToList();
+
+        double span = Math.Max(1d, progressEnd - progressStart);
+        int totalElements = _allRegularProperties.Select(r => r.ElementId).Distinct().Count();
+        progressUpdate?.Invoke(
+            progressStart,
+            totalElements > 0
+                ? $"Import: building element tree (0/{totalElements})"
+                : "Import: building element tree");
+
+        var treeProgress = new Progress<TreeBuildProgress>(state =>
+        {
+            int total = state.TotalElements <= 0 ? totalElements : state.TotalElements;
+            double ratio = total <= 0 ? 1d : Math.Clamp(state.ProcessedElements / (double)total, 0d, 1d);
+            double percent = progressStart + (span * 0.7d * ratio);
+            string text = total > 0
+                ? $"Import: building element tree ({Math.Min(state.ProcessedElements, total)}/{total})"
+                : "Import: building element tree";
+            progressUpdate?.Invoke(percent, text);
+        });
+
+        List<PropertyTreeRow> elementTreeRoots = await Task.Run(
+            () => BuildElementPropertyTreeRoots(
+                _allRegularProperties,
+                activeNames,
+                elementTypeFilter,
+                damagedElementIds,
+                cancellationToken,
+                treeProgress),
+            cancellationToken);
+
+        await ReplaceCollectionAsync(
+            ElementProperties,
+            filtered,
+            500,
+            cancellationToken,
+            (processed, total) =>
+            {
+                double ratio = total <= 0 ? 1d : Math.Clamp(processed / (double)total, 0d, 1d);
+                double percent = progressStart + (span * (0.7d + 0.3d * ratio));
+                string text = total > 0
+                    ? $"Import: applying rows ({processed}/{total})"
+                    : "Import: applying rows";
+                progressUpdate?.Invoke(percent, text);
+            });
+
+        ElementPropertiesModel.SetRoots(elementTreeRoots);
+        SelectedElementPropertyNode = FindNodeBySelectionKey(ElementPropertiesModel, _selectedElementNodeKey);
+        progressUpdate?.Invoke(progressEnd, "Import: filters applied");
     }
 
     private HashSet<string> BuildActivePropertyNameSet()
@@ -1381,7 +1923,7 @@ public partial class MainWindowViewModel : ViewModelBase
             propertyStates);
     }
 
-    private void ClearFiltersForBlueprintImport()
+    private void ClearFiltersForBlueprintImport(bool applyFilter = true)
     {
         ElementTypeNameFilterInput = string.Empty;
         SelectedElementTypeFilterHistoryItem = null;
@@ -1400,10 +1942,13 @@ public partial class MainWindowViewModel : ViewModelBase
             _isBulkUpdatingElementPropertyFilters = false;
         }
 
-        ApplyElementPropertyFilter();
+        if (applyFilter)
+        {
+            ApplyElementPropertyFilter();
+        }
     }
 
-    private void RestoreElementFilters(ElementFilterSnapshot snapshot)
+    private void RestoreElementFilters(ElementFilterSnapshot snapshot, bool applyFilter = true)
     {
         ElementTypeNameFilterInput = snapshot.ElementTypeFilterInput;
         DamagedOnly = snapshot.DamagedOnly;
@@ -1428,7 +1973,10 @@ public partial class MainWindowViewModel : ViewModelBase
             _isBulkUpdatingElementPropertyFilters = false;
         }
 
-        ApplyElementPropertyFilter();
+        if (applyFilter)
+        {
+            ApplyElementPropertyFilter();
+        }
     }
 
     private void AddElementTypeFilterHistory(string? filterText)
@@ -1463,29 +2011,71 @@ public partial class MainWindowViewModel : ViewModelBase
         string elementTypeFilter,
         HashSet<ulong>? damagedElementIds)
     {
+        List<PropertyTreeRow> typeRoots = BuildElementPropertyTreeRoots(
+            records,
+            activePropertyNames,
+            elementTypeFilter,
+            damagedElementIds,
+            cancellationToken: default,
+            progress: null);
+        ElementPropertiesModel.SetRoots(typeRoots);
+    }
+
+    private static List<PropertyTreeRow> BuildElementPropertyTreeRoots(
+        IReadOnlyList<ElementPropertyRecord> records,
+        HashSet<string> activePropertyNames,
+        string elementTypeFilter,
+        HashSet<ulong>? damagedElementIds,
+        CancellationToken cancellationToken,
+        IProgress<TreeBuildProgress>? progress)
+    {
+        List<IGrouping<string, ElementPropertyRecord>> typeGroups = records
+            .GroupBy(r => DeriveElementTypeName(r.ElementDisplayName), StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        int totalElements = records
+            .Select(r => r.ElementId)
+            .Distinct()
+            .Count();
+        int processedElements = 0;
+        int reportEvery = totalElements < 200 ? 1 : 20;
+
         var typeRoots = new List<PropertyTreeRow>();
-        foreach (IGrouping<string, ElementPropertyRecord> byType in records
-                     .GroupBy(r => DeriveElementTypeName(r.ElementDisplayName), StringComparer.OrdinalIgnoreCase)
-                     .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        foreach (IGrouping<string, ElementPropertyRecord> byType in typeGroups)
         {
-            if (!MatchesElementTypeFilter(byType.Key, elementTypeFilter))
-            {
-                continue;
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            IGrouping<ulong, ElementPropertyRecord>[] byElementGroups = byType
+                .OrderBy(r => r.ElementId)
+                .GroupBy(r => r.ElementId)
+                .ToArray();
 
             var elementNodes = new List<PropertyTreeRow>();
 
-            foreach (IGrouping<ulong, ElementPropertyRecord> byElement in byType
-                         .OrderBy(r => r.ElementId)
-                         .GroupBy(r => r.ElementId))
+            foreach (IGrouping<ulong, ElementPropertyRecord> byElement in byElementGroups)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                processedElements++;
                 if (damagedElementIds is not null && !damagedElementIds.Contains(byElement.Key))
                 {
+                    if (processedElements % reportEvery == 0 || processedElements == totalElements)
+                    {
+                        progress?.Report(new TreeBuildProgress(processedElements, totalElements));
+                    }
                     continue;
                 }
 
                 ElementPropertyRecord first = byElement.First();
                 string elementName = ResolveElementName(byElement);
+                if (!MatchesElementTypeOrNameFilter(byType.Key, elementName, elementTypeFilter))
+                {
+                    if (processedElements % reportEvery == 0 || processedElements == totalElements)
+                    {
+                        progress?.Report(new TreeBuildProgress(processedElements, totalElements));
+                    }
+
+                    continue;
+                }
+
                 int totalElementProperties = byElement.Count(p => !IsElementNameProperty(p.Name));
                 List<ElementPropertyRecord> visibleProperties = byElement
                     .Where(p => !IsElementNameProperty(p.Name) &&
@@ -1511,6 +2101,11 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
 
                 elementNodes.Add(elementNode);
+
+                if (processedElements % reportEvery == 0 || processedElements == totalElements)
+                {
+                    progress?.Report(new TreeBuildProgress(processedElements, totalElements));
+                }
             }
 
             if (elementNodes.Count == 0)
@@ -1537,7 +2132,12 @@ public partial class MainWindowViewModel : ViewModelBase
             typeRoots.Add(typeNode);
         }
 
-        ElementPropertiesModel.SetRoots(typeRoots);
+        if (processedElements < totalElements)
+        {
+            progress?.Report(new TreeBuildProgress(totalElements, totalElements));
+        }
+
+        return typeRoots;
     }
 
     private static HashSet<ulong> BuildDamagedElementIdSet(IReadOnlyList<ElementPropertyRecord> records)
@@ -1644,6 +2244,44 @@ public partial class MainWindowViewModel : ViewModelBase
         return MatchesWildcardPattern(elementTypeName, wildcardFilter);
     }
 
+    private static bool MatchesElementTypeOrNameFilter(string elementTypeName, string elementName, string wildcardFilter)
+    {
+        if (string.IsNullOrWhiteSpace(wildcardFilter))
+        {
+            return true;
+        }
+
+        return MatchesWildcardPattern(elementTypeName, wildcardFilter) ||
+               MatchesWildcardPattern(elementName, wildcardFilter);
+    }
+
+    private static Dictionary<ulong, string> BuildElementNameById(IReadOnlyList<ElementPropertyRecord> records)
+    {
+        var names = new Dictionary<ulong, string>();
+        foreach (IGrouping<ulong, ElementPropertyRecord> byElement in records.GroupBy(r => r.ElementId))
+        {
+            string elementName = ResolveElementName(byElement);
+            if (string.IsNullOrWhiteSpace(elementName))
+            {
+                continue;
+            }
+
+            names[byElement.Key] = elementName;
+        }
+
+        return names;
+    }
+
+    private static string ResolveElementName(ulong elementId, IReadOnlyDictionary<ulong, string>? namesByElementId)
+    {
+        if (namesByElementId is null)
+        {
+            return string.Empty;
+        }
+
+        return namesByElementId.TryGetValue(elementId, out string? value) ? value : string.Empty;
+    }
+
     private static string DeriveElementTypeName(string elementDisplayName)
     {
         if (string.IsNullOrWhiteSpace(elementDisplayName))
@@ -1676,15 +2314,24 @@ public partial class MainWindowViewModel : ViewModelBase
         return elementDisplayName[..bracketStart];
     }
 
-    private void ApplyLoadedPropertyCollections(IReadOnlyList<ElementPropertyRecord> records)
+    private async Task ApplyLoadedPropertyCollectionsAsync(
+        IReadOnlyList<ElementPropertyRecord> records,
+        CancellationToken cancellationToken = default,
+        Action<double, string>? progressUpdate = null,
+        bool buildFilteredView = true)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        progressUpdate?.Invoke(62d, "Import: categorizing properties");
+
         List<ElementPropertyRecord> regularProperties = new();
         List<ElementPropertyRecord> dpuyamlProperties = new();
         List<ElementPropertyRecord> content2Properties = new();
         List<ElementPropertyRecord> databankProperties = new();
-
-        foreach (ElementPropertyRecord record in records)
+        int totalRecords = records.Count;
+        int categorizeStep = totalRecords < 1000 ? 100 : 1000;
+        for (int i = 0; i < totalRecords; i++)
         {
+            ElementPropertyRecord record = records[i];
             if (string.Equals(record.Name, "dpuyaml_6", StringComparison.OrdinalIgnoreCase))
             {
                 dpuyamlProperties.Add(record);
@@ -1701,34 +2348,78 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 regularProperties.Add(record);
             }
+
+            if ((i + 1) % categorizeStep == 0 || i + 1 == totalRecords)
+            {
+                double ratio = totalRecords == 0 ? 1d : (i + 1) / (double)totalRecords;
+                double percent = 62d + (6d * ratio);
+                progressUpdate?.Invoke(percent, $"Import: categorizing properties ({i + 1}/{totalRecords})");
+            }
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        progressUpdate?.Invoke(68d, "Import: preparing main tree");
 
         _allRegularProperties.Clear();
         _allRegularProperties.AddRange(regularProperties);
         RebuildPropertyFilterRows(regularProperties);
-        ApplyElementPropertyFilter();
-
-        Dpuyaml6Properties.Clear();
-        foreach (ElementPropertyRecord record in dpuyamlProperties)
+        if (buildFilteredView)
         {
-            Dpuyaml6Properties.Add(record);
+            await ApplyElementPropertyFilterAsync(cancellationToken, progressUpdate, 68d, 76d);
         }
 
-        Content2Properties.Clear();
-        foreach (ElementPropertyRecord record in content2Properties)
-        {
-            Content2Properties.Add(record);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        progressUpdate?.Invoke(76d, "Import: building LUA/HTML/Databank trees");
 
-        DatabankProperties.Clear();
-        foreach (ElementPropertyRecord record in databankProperties)
-        {
-            DatabankProperties.Add(record);
-        }
+        Task<PropertyTreeRow> luaTreeTask = Task.Run(
+            () => BuildCodeBlockTreeRoot(dpuyamlProperties, BuildLuaPartRows, "LUA blocks"),
+            cancellationToken);
+        Task<PropertyTreeRow> htmlTreeTask = Task.Run(
+            () => BuildCodeBlockTreeRoot(content2Properties, BuildContentPartRows, "HTML/RS"),
+            cancellationToken);
+        Task<PropertyTreeRow> databankTreeTask = Task.Run(
+            () => BuildCodeBlockTreeRoot(databankProperties, BuildDatabankPartRows, "Databank"),
+            cancellationToken);
 
-        RebuildCodeBlockTree(Dpuyaml6Model, dpuyamlProperties, BuildLuaPartRows, "LUA blocks");
-        RebuildCodeBlockTree(Content2Model, content2Properties, BuildContentPartRows, "HTML/RS");
-        RebuildCodeBlockTree(DatabankModel, databankProperties, BuildDatabankPartRows, "Databank");
+        PropertyTreeRow luaRoot = await luaTreeTask;
+        PropertyTreeRow htmlRoot = await htmlTreeTask;
+        PropertyTreeRow databankRoot = await databankTreeTask;
+
+        await ReplaceCollectionAsync(
+            Dpuyaml6Properties,
+            dpuyamlProperties,
+            200,
+            cancellationToken,
+            (processed, total) =>
+            {
+                double ratio = total <= 0 ? 1d : Math.Clamp(processed / (double)total, 0d, 1d);
+                progressUpdate?.Invoke(76d + (4d * ratio), $"Import: applying LUA rows ({processed}/{total})");
+            });
+        await ReplaceCollectionAsync(
+            Content2Properties,
+            content2Properties,
+            200,
+            cancellationToken,
+            (processed, total) =>
+            {
+                double ratio = total <= 0 ? 1d : Math.Clamp(processed / (double)total, 0d, 1d);
+                progressUpdate?.Invoke(80d + (4d * ratio), $"Import: applying HTML/RS rows ({processed}/{total})");
+            });
+        await ReplaceCollectionAsync(
+            DatabankProperties,
+            databankProperties,
+            200,
+            cancellationToken,
+            (processed, total) =>
+            {
+                double ratio = total <= 0 ? 1d : Math.Clamp(processed / (double)total, 0d, 1d);
+                progressUpdate?.Invoke(84d + (4d * ratio), $"Import: applying databank rows ({processed}/{total})");
+            });
+
+        Dpuyaml6Model.SetRoot(luaRoot);
+        Content2Model.SetRoot(htmlRoot);
+        DatabankModel.SetRoot(databankRoot);
+        progressUpdate?.Invoke(92d, "Import: finalizing view");
 
         if (AutoCollapseToFirstLevel)
         {
@@ -1738,7 +2429,6 @@ public partial class MainWindowViewModel : ViewModelBase
             DatabankModel.CollapseAll(minDepth: 1);
         }
 
-        SelectedElementPropertyNode = FindNodeBySelectionKey(ElementPropertiesModel, _selectedElementNodeKey);
         SelectedDpuyaml6Node = FindNodeBySelectionKey(Dpuyaml6Model, _selectedDpuyamlNodeKey);
         SelectedContent2Node = FindNodeBySelectionKey(Content2Model, _selectedContent2NodeKey);
         SelectedDatabankNode = FindNodeBySelectionKey(DatabankModel, _selectedDatabankNodeKey);
@@ -1757,10 +2447,18 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             SelectedDatabankContent = string.Empty;
         }
+
+        if (buildFilteredView)
+        {
+            progressUpdate?.Invoke(96d, "Import: applying filters");
+        }
+        else
+        {
+            progressUpdate?.Invoke(86d, "Import: preparing filters");
+        }
     }
 
-    private static void RebuildCodeBlockTree(
-        HierarchicalModel<PropertyTreeRow> model,
+    private static PropertyTreeRow BuildCodeBlockTreeRoot(
         IReadOnlyList<ElementPropertyRecord> records,
         Func<ElementPropertyRecord, IReadOnlyList<PropertyTreeRow>> partBuilder,
         string rootLabel)
@@ -1783,7 +2481,45 @@ public partial class MainWindowViewModel : ViewModelBase
             root.Children.Add(blockNode);
         }
 
+        return root;
+    }
+
+    private static void RebuildCodeBlockTree(
+        HierarchicalModel<PropertyTreeRow> model,
+        IReadOnlyList<ElementPropertyRecord> records,
+        Func<ElementPropertyRecord, IReadOnlyList<PropertyTreeRow>> partBuilder,
+        string rootLabel)
+    {
+        PropertyTreeRow root = BuildCodeBlockTreeRoot(records, partBuilder, rootLabel);
         model.SetRoot(root);
+    }
+
+    private static async Task ReplaceCollectionAsync(
+        ObservableCollection<ElementPropertyRecord> target,
+        IReadOnlyList<ElementPropertyRecord> source,
+        int batchSize,
+        CancellationToken cancellationToken,
+        Action<int, int>? progress = null)
+    {
+        target.Clear();
+        int total = source.Count;
+        progress?.Invoke(0, total);
+        if (total == 0)
+        {
+            return;
+        }
+
+        int safeBatchSize = batchSize <= 0 ? 200 : batchSize;
+        for (int i = 0; i < total; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            target.Add(source[i]);
+            if ((i + 1) % safeBatchSize == 0 || i + 1 == total)
+            {
+                progress?.Invoke(i + 1, total);
+                await Task.Yield();
+            }
+        }
     }
 
     private static PropertyTreeRow CreatePropertyLeaf(
@@ -3079,10 +3815,19 @@ public partial class MainWindowViewModel : ViewModelBase
         sb.AppendLine("Blueprint import (local file)");
         sb.AppendLine($"Source: {importResult.SourceName}");
         sb.AppendLine($"Name: {importResult.BlueprintName}");
-        sb.AppendLine(
-            $"BlueprintId: {importResult.BlueprintId?.ToString(CultureInfo.InvariantCulture) ?? "<none>"}");
+        sb.AppendLine($"BlueprintId: {FormatBlueprintIdForDisplay(importResult.BlueprintId, "<none>")}");
         sb.AppendLine($"Elements: {importResult.ElementCount.ToString(CultureInfo.InvariantCulture)}");
         sb.AppendLine($"Properties loaded: {importResult.Properties.Count.ToString(CultureInfo.InvariantCulture)}");
+        if (!string.IsNullOrWhiteSpace(importResult.ImportPipeline))
+        {
+            sb.AppendLine($"Import pipeline: {importResult.ImportPipeline}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(importResult.ImportNotes))
+        {
+            sb.AppendLine($"Import notes: {importResult.ImportNotes}");
+        }
+
         DatabaseSummary = sb.ToString();
     }
 
@@ -3156,6 +3901,14 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     partial void OnServerRootPathInputChanged(string value)
+    {
+    }
+
+    partial void OnNqUtilsDllPathInputChanged(string value)
+    {
+    }
+
+    partial void OnBlueprintImportEndpointInputChanged(string value)
     {
     }
 

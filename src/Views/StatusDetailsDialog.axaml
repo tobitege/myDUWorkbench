@@ -1,0 +1,35 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="myDUWorker.Views.StatusDetailsDialog"
+        Width="920"
+        Height="620"
+        MinWidth="640"
+        MinHeight="380"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="12"
+          RowDefinitions="*,Auto"
+          RowSpacing="10">
+        <TextBox x:Name="DetailsTextBox"
+                 Grid.Row="0"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 HorizontalAlignment="Stretch"
+                 VerticalAlignment="Stretch" />
+
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <TextBlock x:Name="CopyResultText"
+                       VerticalAlignment="Center"
+                       Foreground="DarkSeaGreen"
+                       Text="" />
+            <Button Content="Copy to Clipboard"
+                    Click="OnCopyClick" />
+            <Button Content="Close"
+                    Click="OnCloseClick" />
+        </StackPanel>
+    </Grid>
+</Window>
+

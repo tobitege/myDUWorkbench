@@ -217,24 +217,91 @@ public partial class MainWindow : Window
             }
 
             IStorageFile selected = files[0];
-            await using Stream readStream = await selected.OpenReadAsync();
-            using var reader = new StreamReader(readStream, Encoding.UTF8, true);
-            string json = await reader.ReadToEndAsync();
-
             string sourcePath = ResolveStorageFilePath(selected);
+
+            var confirm = new ConfirmationDialog(
+                "Import Blueprint",
+                "Import blueprint file?",
+                "Import",
+                "Cancel",
+                hintText: "Blueprint import can take some time, especially for large files. Please wait until the status bar confirms completion.",
+                detailsText: sourcePath,
+                option1Label: "Dry run mode",
+                option1Checked: vm.BlueprintImportDryRunMode,
+                option2Label: "Import into app",
+                option2Checked: vm.BlueprintImportIntoApp,
+                option3Label: "Import into game database",
+                option3Checked: vm.BlueprintImportIntoGameDatabase,
+                option4Label: "Append date if BP exists",
+                option4Checked: vm.BlueprintImportAppendDateIfExists);
+            bool confirmed = await confirm.ShowDialog<bool>(this);
+            if (!confirmed)
+            {
+                vm.StatusMessage = "Blueprint import cancelled.";
+                return;
+            }
+
+            vm.BlueprintImportDryRunMode = confirm.IsOption1Checked;
+            vm.BlueprintImportIntoApp = confirm.IsOption2Checked;
+            vm.BlueprintImportIntoGameDatabase = confirm.IsOption3Checked;
+            vm.BlueprintImportAppendDateIfExists = confirm.IsOption4Checked;
+
             UpdateLastUsedFolder(vm, sourcePath);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            await vm.ImportBlueprintJsonAsync(json, sourcePath, cts.Token);
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
+            if (Path.IsPathRooted(sourcePath) && File.Exists(sourcePath))
+            {
+                await vm.ImportBlueprintFileAsync(
+                    sourcePath,
+                    vm.BlueprintImportDryRunMode,
+                    vm.BlueprintImportIntoApp,
+                    vm.BlueprintImportIntoGameDatabase,
+                    vm.BlueprintImportAppendDateIfExists,
+                    cts.Token);
+            }
+            else
+            {
+                await using Stream readStream = await selected.OpenReadAsync();
+                using var reader = new StreamReader(readStream, Encoding.UTF8, true);
+                string json = await reader.ReadToEndAsync();
+                await vm.ImportBlueprintJsonAsync(
+                    json,
+                    sourcePath,
+                    vm.BlueprintImportDryRunMode,
+                    vm.BlueprintImportIntoApp,
+                    vm.BlueprintImportIntoGameDatabase,
+                    vm.BlueprintImportAppendDateIfExists,
+                    cts.Token);
+            }
         }
         catch (OperationCanceledException)
         {
+            vm.LastBlueprintImportErrorDetails = string.Empty;
             vm.StatusMessage = "Blueprint import cancelled.";
         }
         catch (Exception ex)
         {
-            vm.StatusMessage = $"Blueprint import failed: {ex.Message}";
+            vm.SetBlueprintImportError(ex);
         }
+    }
+
+    private async void OnStatusMessagePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _ = sender;
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        if (DataContext is not MainWindowViewModel vm ||
+            !vm.TryGetBlueprintImportErrorDetails(out string title, out string details))
+        {
+            return;
+        }
+
+        var dialog = new StatusDetailsDialog(title, details);
+        await dialog.ShowDialog(this);
+        e.Handled = true;
     }
 
     private async void OnSaveLuaAsClick(object? sender, RoutedEventArgs e)
