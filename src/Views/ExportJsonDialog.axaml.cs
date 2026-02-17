@@ -4,7 +4,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 
-namespace MyDu.Views;
+namespace myDUWorker.Views;
 
 public partial class ExportJsonDialog : Window
 {

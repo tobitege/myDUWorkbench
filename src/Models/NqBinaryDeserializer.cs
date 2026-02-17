@@ -6,7 +6,7 @@
 using System;
 using System.Text;
 
-namespace MyDu.Models;
+namespace myDUWorker.Models;
 
 public sealed class NqBinaryDeserializer
 {

@@ -4,7 +4,7 @@
 using Avalonia;
 using System;
 
-namespace MyDu;
+namespace myDUWorker;
 
 sealed class Program
 {

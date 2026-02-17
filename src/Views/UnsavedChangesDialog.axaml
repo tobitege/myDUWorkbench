@@ -1,0 +1,33 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="myDUWorker.Views.UnsavedChangesDialog"
+        Title="Unsaved LUA changes"
+        Width="560"
+        MinWidth="520"
+        Height="210"
+        MinHeight="200"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    <Grid Margin="14"
+          RowDefinitions="Auto,*,Auto"
+          RowSpacing="10">
+        <TextBlock Grid.Row="0"
+                   FontWeight="SemiBold"
+                   Text="You have unsaved LUA editor changes." />
+
+        <TextBlock Grid.Row="1"
+                   x:Name="PromptText"
+                   TextWrapping="Wrap"
+                   Text="Discard unsaved changes and continue?" />
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <Button Content="Keep Editing"
+                    Click="OnKeepEditingClick" />
+            <Button Content="Discard Changes"
+                    Click="OnDiscardClick" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -2,7 +2,7 @@
 // - WorkbenchSettings: Runtime settings model consumed directly by the view model.
 // - PersistedWorkbenchSettings: Disk-serialization model including encrypted password field.
 // - WindowPlacementSettings: Captures size/position/screen/maximized window state.
-namespace MyDu.Models;
+namespace myDUWorker.Models;
 
 using System.Collections.Generic;
 
@@ -23,6 +23,10 @@ public sealed class WorkbenchSettings
     public string ElementTypeNameFilterInput { get; set; } = string.Empty;
     public List<string> ElementTypeFilterHistory { get; set; } = new();
     public bool AutoLoadOnStartup { get; set; } = true;
+    public bool AutoLoadPlayerNames { get; set; } = true;
+    public bool LimitToSelectedPlayerConstructs { get; set; } = true;
+    public bool AutoConnectDatabase { get; set; }
+    public int AutoConnectRetrySeconds { get; set; } = 30;
     public bool AutoWrapContent { get; set; }
     public bool AutoCollapseToFirstLevel { get; set; }
     public bool LuaVersioningEnabled { get; set; }
@@ -55,6 +59,10 @@ public sealed class PersistedWorkbenchSettings
     public string ElementTypeNameFilterInput { get; set; } = string.Empty;
     public List<string> ElementTypeFilterHistory { get; set; } = new();
     public bool AutoLoadOnStartup { get; set; } = true;
+    public bool AutoLoadPlayerNames { get; set; } = true;
+    public bool LimitToSelectedPlayerConstructs { get; set; } = true;
+    public bool AutoConnectDatabase { get; set; }
+    public int AutoConnectRetrySeconds { get; set; } = 30;
     public bool AutoWrapContent { get; set; }
     public bool AutoCollapseToFirstLevel { get; set; }
     public bool LuaVersioningEnabled { get; set; }

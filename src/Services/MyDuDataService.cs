@@ -3,7 +3,7 @@
 // - GetUserConstructsAsync: Lists user-owned constructs by core type (dynamic/static/space) with configurable sorting.
 // - SearchConstructsByNameAsync: Returns construct id/name suggestions via ILIKE matching.
 // - ProbeEndpointAsync: Probes construct endpoint payloads and attempts JSON/binary decoding.
-using MyDu.Models;
+using myDUWorker.Models;
 using Npgsql;
 using System;
 using System.Collections.Generic;
@@ -14,7 +14,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace MyDu.Services;
+namespace myDUWorker.Services;
 
 public sealed class MyDuDataService
 {
@@ -329,6 +329,33 @@ public sealed class MyDuDataService
         cmd.Parameters.AddWithValue("maxRows", maxRows);
 
         var records = new List<PlayerNameLookupRecord>(maxRows);
+        await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            ulong? playerId = TryGetUInt64(reader, 0);
+            string playerName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            records.Add(new PlayerNameLookupRecord(playerId, playerName));
+        }
+
+        return records;
+    }
+
+    public async Task<IReadOnlyList<PlayerNameLookupRecord>> GetPlayersSortedByNameAsync(
+        DataConnectionOptions options,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(BuildConnectionString(options));
+        await connection.OpenAsync(cancellationToken);
+
+        const string sql = """
+            SELECT id, display_name
+            FROM player
+            ORDER BY display_name, id;
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, connection);
+
+        var records = new List<PlayerNameLookupRecord>();
         await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {

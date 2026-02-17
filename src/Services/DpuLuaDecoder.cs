@@ -12,7 +12,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace MyDu.Services;
+namespace myDUWorker.Services;
 
 public sealed record DpuLuaDecodeResult(
     string DecodedText,
@@ -25,7 +25,6 @@ public sealed record DpuLuaDecodeResult(
 public static class DpuLuaDecoder
 {
     private static readonly Regex HashRegex = new("^[0-9a-f]{64}$", RegexOptions.Compiled);
-    private static readonly Regex SafeNameRegex = new("[^A-Za-z0-9._-]+", RegexOptions.Compiled);
 
     public static bool TryDecode(byte[] dbValue, string serverRootPath, out DpuLuaDecodeResult? result, out string? error)
     {
@@ -74,6 +73,49 @@ public static class DpuLuaDecoder
                 sections.Count,
                 sourceBlobPath);
 
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    public static bool TryBuildCombinedLuaFromJsonText(
+        string jsonText,
+        out string combinedLua,
+        out int sectionCount,
+        out string? error)
+    {
+        combinedLua = string.Empty;
+        sectionCount = 0;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(jsonText))
+        {
+            error = "JSON payload is empty.";
+            return false;
+        }
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(jsonText);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                error = "JSON root must be an object.";
+                return false;
+            }
+
+            List<(string Name, string Code)> sections = ExtractCodeSections(document.RootElement);
+            if (sections.Count == 0)
+            {
+                error = "No handlers/methods/events code sections found in JSON.";
+                return false;
+            }
+
+            combinedLua = BuildCombinedLua(sections);
+            sectionCount = sections.Count;
             return true;
         }
         catch (Exception ex)
@@ -154,6 +196,7 @@ public static class DpuLuaDecoder
     private static List<(string Name, string Code)> ExtractCodeSections(JsonElement root)
     {
         var sections = new List<(string Name, string Code)>();
+        Dictionary<string, string> slotNameByKey = ExtractSlotNameMap(root);
 
         if (root.ValueKind != JsonValueKind.Object)
         {
@@ -180,16 +223,10 @@ public static class DpuLuaDecoder
                     ? keyElement.ToString()
                     : idx.ToString(CultureInfo.InvariantCulture);
 
-                string signature = string.Empty;
-                if (item.TryGetProperty("filter", out JsonElement filterElement) &&
-                    filterElement.ValueKind == JsonValueKind.Object &&
-                    TryGetString(filterElement, "signature", out string? sig) &&
-                    !string.IsNullOrWhiteSpace(sig))
-                {
-                    signature = sig;
-                }
-
-                string title = $"handler_{key}_{SafeName(!string.IsNullOrWhiteSpace(signature) ? signature : $"entry_{idx}")}";
+                string signature = GetHandlerSignature(item);
+                string slotKey = GetHandlerSlotKey(item);
+                IReadOnlyList<string> filterArgs = GetHandlerFilterArgs(item);
+                string title = DpuLuaSectionTitleBuilder.BuildHandlerTitle(idx, key, slotKey, signature, filterArgs, slotNameByKey);
                 sections.Add((title, code));
             }
         }
@@ -212,9 +249,9 @@ public static class DpuLuaDecoder
 
                 string name = TryGetString(item, "name", out string? methodName) && !string.IsNullOrWhiteSpace(methodName)
                     ? methodName
-                    : $"method_{idx}";
+                    : string.Empty;
 
-                string title = $"method_{SafeName(name)}";
+                string title = DpuLuaSectionTitleBuilder.BuildMethodTitle(idx, name);
                 sections.Add((title, code));
             }
         }
@@ -237,14 +274,41 @@ public static class DpuLuaDecoder
 
                 string name = TryGetString(item, "name", out string? eventName) && !string.IsNullOrWhiteSpace(eventName)
                     ? eventName
-                    : $"event_{idx}";
+                    : string.Empty;
 
-                string title = $"event_{SafeName(name)}";
+                string title = DpuLuaSectionTitleBuilder.BuildEventTitle(idx, name);
                 sections.Add((title, code));
             }
         }
 
         return sections;
+    }
+
+    private static Dictionary<string, string> ExtractSlotNameMap(JsonElement root)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("slots", out JsonElement slotsElement) ||
+            slotsElement.ValueKind != JsonValueKind.Object)
+        {
+            return map;
+        }
+
+        foreach (JsonProperty slotProperty in slotsElement.EnumerateObject())
+        {
+            if (slotProperty.Value.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (TryGetString(slotProperty.Value, "name", out string? slotName) &&
+                !string.IsNullOrWhiteSpace(slotName))
+            {
+                map[slotProperty.Name] = slotName.Trim();
+            }
+        }
+
+        return map;
     }
 
     private static string BuildCombinedLua(IReadOnlyList<(string Name, string Code)> sections)
@@ -265,10 +329,82 @@ public static class DpuLuaDecoder
         return sb.ToString().TrimEnd();
     }
 
-    private static string SafeName(string value)
+    private static string GetHandlerSignature(JsonElement item)
     {
-        string cleaned = SafeNameRegex.Replace(value.Trim(), "_").Trim('_');
-        return string.IsNullOrEmpty(cleaned) ? "unnamed" : cleaned;
+        if (item.TryGetProperty("filter", out JsonElement filterElement) &&
+            filterElement.ValueKind == JsonValueKind.Object)
+        {
+            string signature = GetStringValue(filterElement, "signature");
+            if (!string.IsNullOrWhiteSpace(signature))
+            {
+                return signature;
+            }
+        }
+
+        return GetStringValue(item, "signature");
+    }
+
+    private static string GetHandlerSlotKey(JsonElement item)
+    {
+        if (item.TryGetProperty("filter", out JsonElement filterElement) &&
+            filterElement.ValueKind == JsonValueKind.Object)
+        {
+            string slotKey = GetStringValue(filterElement, "slotKey");
+            if (!string.IsNullOrWhiteSpace(slotKey))
+            {
+                return slotKey;
+            }
+        }
+
+        return GetStringValue(item, "slotKey");
+    }
+
+    private static IReadOnlyList<string> GetHandlerFilterArgs(JsonElement item)
+    {
+        var args = new List<string>();
+        if (!item.TryGetProperty("filter", out JsonElement filterElement) ||
+            filterElement.ValueKind != JsonValueKind.Object ||
+            !filterElement.TryGetProperty("args", out JsonElement argsElement) ||
+            argsElement.ValueKind != JsonValueKind.Array)
+        {
+            return args;
+        }
+
+        foreach (JsonElement argElement in argsElement.EnumerateArray())
+        {
+            if (argElement.ValueKind == JsonValueKind.Object)
+            {
+                string value = GetStringValue(argElement, "value");
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    value = GetStringValue(argElement, "variable");
+                }
+
+                args.Add(value);
+                continue;
+            }
+
+            args.Add(argElement.ToString());
+        }
+
+        return args;
+    }
+
+    private static string GetStringValue(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out JsonElement element))
+        {
+            return string.Empty;
+        }
+
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString() ?? string.Empty,
+            JsonValueKind.Number => element.ToString(),
+            JsonValueKind.True => bool.TrueString,
+            JsonValueKind.False => bool.FalseString,
+            _ => string.Empty
+        };
     }
 
     private static bool TryGetString(JsonElement obj, string name, out string? value)

@@ -2,9 +2,9 @@
 // - CreateBackupAsync: Writes timestamped backup snapshots with metadata header and script payload.
 // - GetBackupsAsync: Lists and parses all backup files for UI browsing.
 // - ReadBackupAsync: Loads backup file and separates metadata header from script content.
-namespace MyDu.Services;
+namespace myDUWorker.Services;
 
-using MyDu.Models;
+using myDUWorker.Models;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -28,7 +28,7 @@ public sealed class LuaBackupService
         _backupDirectoryPath = backupDirectoryPath ??
             Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "MyDu",
+                "myDUWorker",
                 "LuaBackups");
     }
 

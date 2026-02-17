@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using AvaloniaEdit.Document;
 
-namespace MyDu.Helpers;
+namespace myDUWorker.Helpers;
 
 public sealed record LuaFoldRegion(int StartOffset, int EndOffset, string Title);
 

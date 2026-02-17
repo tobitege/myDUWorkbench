@@ -3,7 +3,7 @@
 // - SaveAsync: Serializes and writes settings with save-gate synchronization.
 // - BuildPersistedSettings: Maps runtime settings into persisted DTO form.
 // - EncryptPassword / DecryptPassword: Protects DB credentials with Windows DPAPI user scope.
-using MyDu.Models;
+using myDUWorker.Models;
 using System;
 using System.IO;
 using System.Security.Cryptography;
@@ -12,7 +12,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace MyDu.Services;
+namespace myDUWorker.Services;
 
 public sealed class WorkbenchSettingsService
 {
@@ -25,7 +25,7 @@ public sealed class WorkbenchSettingsService
         _settingsFilePath = settingsFilePath ??
             Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "MyDu",
+                "myDUWorker",
                 "workbench-settings.json");
     }
 
@@ -57,6 +57,10 @@ public sealed class WorkbenchSettingsService
                 ElementTypeNameFilterInput = persisted.ElementTypeNameFilterInput,
                 ElementTypeFilterHistory = persisted.ElementTypeFilterHistory ?? new(),
                 AutoLoadOnStartup = persisted.AutoLoadOnStartup,
+                AutoLoadPlayerNames = persisted.AutoLoadPlayerNames,
+                LimitToSelectedPlayerConstructs = persisted.LimitToSelectedPlayerConstructs,
+                AutoConnectDatabase = persisted.AutoConnectDatabase,
+                AutoConnectRetrySeconds = persisted.AutoConnectRetrySeconds,
                 AutoWrapContent = persisted.AutoWrapContent,
                 AutoCollapseToFirstLevel = persisted.AutoCollapseToFirstLevel,
                 LuaVersioningEnabled = persisted.LuaVersioningEnabled,
@@ -127,6 +131,10 @@ public sealed class WorkbenchSettingsService
             ElementTypeNameFilterInput = settings.ElementTypeNameFilterInput,
             ElementTypeFilterHistory = settings.ElementTypeFilterHistory ?? new(),
             AutoLoadOnStartup = settings.AutoLoadOnStartup,
+            AutoLoadPlayerNames = settings.AutoLoadPlayerNames,
+            LimitToSelectedPlayerConstructs = settings.LimitToSelectedPlayerConstructs,
+            AutoConnectDatabase = settings.AutoConnectDatabase,
+            AutoConnectRetrySeconds = settings.AutoConnectRetrySeconds,
             AutoWrapContent = settings.AutoWrapContent,
             AutoCollapseToFirstLevel = settings.AutoCollapseToFirstLevel,
             LuaVersioningEnabled = settings.LuaVersioningEnabled,

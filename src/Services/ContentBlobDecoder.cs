@@ -9,7 +9,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace MyDu.Services;
+namespace myDUWorker.Services;
 
 public sealed record ContentBlobDecodeResult(
     string DecodedText,

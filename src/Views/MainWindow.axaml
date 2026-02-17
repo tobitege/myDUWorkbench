@@ -1,6 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:vm="using:MyDu.ViewModels"
+        xmlns:vm="using:myDUWorker.ViewModels"
         xmlns:hier="clr-namespace:Avalonia.Controls.DataGridHierarchical;assembly=Avalonia.Controls.DataGrid"
         xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -8,7 +8,7 @@
         mc:Ignorable="d"
         d:DesignWidth="1280"
         d:DesignHeight="900"
-        x:Class="MyDu.Views.MainWindow"
+        x:Class="myDUWorker.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Icon="/Assets/avalonia-logo.ico"
         Title="myDU Construct Workbench"
@@ -30,7 +30,7 @@
             <TextBlock Foreground="DarkOrange"
                        Text="{Binding StatusMessage}" />
             <TextBlock Foreground="DarkSeaGreen"
-                       Text="{Binding DatabaseAvailabilityStatus, StringFormat=DB: {0}}" />
+                       Text="{Binding DatabaseAvailabilityDisplay, StringFormat=DB: {0}}" />
         </StackPanel>
 
         <Border x:Name="MainWorkbenchRoot"
@@ -43,14 +43,13 @@
                     <Grid RowDefinitions="Auto,Auto,*"
                           RowSpacing="10">
                         <WrapPanel Orientation="Horizontal"
-                                   ItemWidth="390"
-                                   ItemHeight="196">
+                                   ItemWidth="390">
                             <Border BorderThickness="1"
                                     BorderBrush="#505050"
                                     CornerRadius="4"
                                     Padding="8">
                                 <StackPanel Spacing="4">
-                                    <TextBlock Text="Construct Name Search (3+ chars, wildcard * supported)" />
+                                    <TextBlock Text="Construct Name Filter (wildcard * supported)" />
                                     <Grid ColumnDefinitions="180,*"
                                           ColumnSpacing="8">
                                         <TextBox Grid.Column="0"
@@ -83,11 +82,8 @@
                                                         Command="{Binding UseConstructSuggestionAndLoadCommand}" />
                                         </ComboBox.KeyBindings>
                                     </ComboBox>
-                                    <TextBlock Text="Construct ID" />
-                                    <TextBox Text="{Binding ConstructIdInput}"
-                                             Width="100"
-                                             MaxWidth="100"
-                                             HorizontalAlignment="Left" />
+                                    <CheckBox Content="Limit to selected player constructs"
+                                              IsChecked="{Binding LimitToSelectedPlayerConstructs}" />
                                 </StackPanel>
                             </Border>
 
@@ -96,8 +92,8 @@
                                     CornerRadius="4"
                                     Padding="8">
                                 <StackPanel Spacing="4">
-                                    <TextBlock Text="Player Name Search (3+ chars, wildcard * supported)" />
-                                    <Grid ColumnDefinitions="180,*"
+                                    <TextBlock Text="Player Name Filter (wildcard * supported)" />
+                                    <Grid ColumnDefinitions="180,Auto,*"
                                           ColumnSpacing="8">
                                         <TextBox Grid.Column="0"
                                                  Text="{Binding PlayerNameSearchInput}"
@@ -105,7 +101,17 @@
                                                  MaxWidth="180"
                                                  HorizontalAlignment="Left"
                                                  Watermark="tob or tob*" />
-                                        <TextBlock Grid.Column="1"
+                                        <Button Grid.Column="1"
+                                                Width="28"
+                                                Height="28"
+                                                Padding="0"
+                                                Command="{Binding RefreshPlayerNamesCommand}"
+                                                ToolTip.Tip="Refresh player list">
+                                            <PathIcon Width="14"
+                                                      Height="14"
+                                                      Data="M17.65 6.35A8 8 0 1 0 20 12H18A6 6 0 1 1 16.24 7.76L13 11H20V4L17.65 6.35Z" />
+                                        </Button>
+                                        <TextBlock Grid.Column="2"
                                                    VerticalAlignment="Center"
                                                    Text="{Binding PlayerSearchStatus}" />
                                     </Grid>
@@ -120,11 +126,7 @@
                                             </DataTemplate>
                                         </ComboBox.ItemTemplate>
                                     </ComboBox>
-                                    <TextBlock Text="Player ID (optional)" />
-                                    <TextBox Text="{Binding PlayerIdInput}"
-                                             Width="100"
-                                             MaxWidth="100"
-                                             HorizontalAlignment="Left" />
+                                    <TextBlock Text="{Binding SelectedPlayerIdDisplay, StringFormat=Player ID: {0}}" />
                                 </StackPanel>
                             </Border>
                         </WrapPanel>
@@ -135,8 +137,6 @@
                                    HorizontalAlignment="Left">
                             <Button Content="Load DB Snapshot"
                                     Command="{Binding LoadDatabaseCommand}" />
-                            <Button Content="Export getConstructData JSON"
-                                    Click="OnExportGetConstructDataClick" />
                         </WrapPanel>
 
                         <TabControl Grid.Row="2">
@@ -177,6 +177,14 @@
                                             <Button Content="Clear"
                                                     Width="70"
                                                     Command="{Binding ClearElementTypeFilterHistoryCommand}" />
+                                            <Border Width="1"
+                                                    Height="24"
+                                                    Margin="10,0,6,0"
+                                                    Background="#505050"
+                                                    VerticalAlignment="Center" />
+                                            <Button Content="Export getConstructData JSON"
+                                                    Width="220"
+                                                    Click="OnExportGetConstructDataClick" />
                                         </StackPanel>
 
                                         <DataGrid Grid.Row="1"
@@ -278,7 +286,7 @@
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Margin="0,6,0,0">
-                                    <Grid RowDefinitions="Auto,3*,4*"
+                                    <Grid RowDefinitions="Auto,3*,Auto,4*"
                                           RowSpacing="8">
                                         <WrapPanel Grid.Row="0"
                                                    Orientation="Horizontal"
@@ -346,7 +354,13 @@
                                             </DataGrid.Columns>
                                         </DataGrid>
 
-                                        <TextBox Grid.Row="2"
+                                        <GridSplitter Grid.Row="2"
+                                                      Height="6"
+                                                      HorizontalAlignment="Stretch"
+                                                      ResizeDirection="Rows"
+                                                      Background="#505050" />
+
+                                        <TextBox Grid.Row="3"
                                                  IsReadOnly="True"
                                                  AcceptsReturn="True"
                                                  TextWrapping="{Binding ContentTextWrapping}"
@@ -363,7 +377,7 @@
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Margin="0,6,0,0">
-                                    <Grid RowDefinitions="Auto,3*,4*"
+                                    <Grid RowDefinitions="Auto,3*,Auto,4*"
                                           RowSpacing="8">
                                         <WrapPanel Grid.Row="0"
                                                    Orientation="Horizontal"
@@ -428,7 +442,13 @@
                                             </DataGrid.Columns>
                                         </DataGrid>
 
-                                        <TextBox Grid.Row="2"
+                                        <GridSplitter Grid.Row="2"
+                                                      Height="6"
+                                                      HorizontalAlignment="Stretch"
+                                                      ResizeDirection="Rows"
+                                                      Background="#505050" />
+
+                                        <TextBox Grid.Row="3"
                                                  IsReadOnly="True"
                                                  AcceptsReturn="True"
                                                  TextWrapping="{Binding ContentTextWrapping}"
@@ -445,7 +465,7 @@
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Margin="0,6,0,0">
-                                    <Grid RowDefinitions="Auto,3*,4*"
+                                    <Grid RowDefinitions="Auto,3*,Auto,4*"
                                           RowSpacing="8">
                                         <WrapPanel Grid.Row="0"
                                                    Orientation="Horizontal"
@@ -521,7 +541,13 @@
                                             </DataGrid.Columns>
                                         </DataGrid>
 
-                                        <TextBox Grid.Row="2"
+                                        <GridSplitter Grid.Row="2"
+                                                      Height="6"
+                                                      HorizontalAlignment="Stretch"
+                                                      ResizeDirection="Rows"
+                                                      Background="#505050" />
+
+                                        <TextBox Grid.Row="3"
                                                  IsReadOnly="True"
                                                  AcceptsReturn="True"
                                                  TextWrapping="{Binding ContentTextWrapping}"
@@ -634,6 +660,19 @@
                                              HorizontalAlignment="Left" />
                                 </StackPanel>
                             </Border>
+
+                            <Border BorderThickness="1"
+                                    BorderBrush="#505050"
+                                    CornerRadius="4"
+                                    Padding="8">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="Connection" />
+                                    <Button Content="Connect now"
+                                            Command="{Binding ConnectDatabaseCommand}"
+                                            Width="140"
+                                            HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
                         </WrapPanel>
 
                         <TabControl Grid.Row="1">
@@ -716,25 +755,47 @@
                             BorderBrush="#505050"
                             CornerRadius="4"
                             Padding="8">
-                        <Grid RowDefinitions="Auto,Auto,Auto,Auto,*"
+                        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
                               RowSpacing="8">
                             <CheckBox Grid.Row="0"
                                       Content="Auto-load on startup"
                                       IsChecked="{Binding AutoLoadOnStartup}" />
 
                             <CheckBox Grid.Row="1"
+                                      Content="Auto-connect database when offline"
+                                      IsChecked="{Binding AutoConnectDatabase}" />
+
+                            <StackPanel Grid.Row="2"
+                                        Orientation="Horizontal"
+                                        Spacing="10"
+                                        VerticalAlignment="Center">
+                                <TextBlock VerticalAlignment="Center"
+                                           Text="Auto-connect retry interval (seconds)" />
+                                <NumericUpDown Minimum="10"
+                                               Maximum="9999"
+                                               Increment="1"
+                                               FormatString="F0"
+                                               Value="{Binding AutoConnectRetrySeconds, Mode=TwoWay}"
+                                               Width="120" />
+                            </StackPanel>
+
+                            <CheckBox Grid.Row="3"
                                       Content="Auto-wrap content panes"
                                       IsChecked="{Binding AutoWrapContent}" />
 
-                            <CheckBox Grid.Row="2"
+                            <CheckBox Grid.Row="4"
                                       Content="Auto-collapse to 1st level"
                                       IsChecked="{Binding AutoCollapseToFirstLevel}" />
 
-                            <CheckBox Grid.Row="3"
+                            <CheckBox Grid.Row="5"
                                       Content="LUA versioning backups"
                                       IsChecked="{Binding LuaVersioningEnabled}" />
 
-                            <DataGrid Grid.Row="4"
+                            <CheckBox Grid.Row="6"
+                                      Content="Auto-load player names"
+                                      IsChecked="{Binding AutoLoadPlayerNames}" />
+
+                            <DataGrid Grid.Row="7"
                                       x:Name="ConfigPropertiesGrid"
                                       AutoGenerateColumns="False"
                                       CanUserSortColumns="True"
@@ -813,18 +874,143 @@
                                   Unchecked="OnLuaEditorWordWrapChanged" />
                 </WrapPanel>
 
-                <ae:TextEditor Grid.Row="2"
-                               x:Name="LuaSourceEditor"
-                               FontFamily="Consolas, Courier New, monospace"
-                               FontSize="16"
-                               ShowLineNumbers="True"
-                               WordWrap="False"
-                               HorizontalScrollBarVisibility="Auto"
-                               VerticalScrollBarVisibility="Auto" />
+                <Grid Grid.Row="2"
+                      ColumnDefinitions="300,6,*"
+                      ColumnSpacing="8">
+                    <Border Grid.Column="0"
+                            x:Name="LuaEditorSectionPane"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="6"
+                            IsVisible="False">
+                        <Grid RowDefinitions="Auto,Auto,*"
+                              RowSpacing="6">
+                            <TextBlock Grid.Row="0"
+                                       FontWeight="SemiBold"
+                                       Text="Sections" />
+                            <TextBlock Grid.Row="1"
+                                       x:Name="LuaEditorSectionSummaryText"
+                                       Foreground="DarkSeaGreen"
+                                       Text="Structured mode" />
+                            <DataGrid Grid.Row="2"
+                                      x:Name="LuaEditorSectionGrid"
+                                      AutoGenerateColumns="False"
+                                      HierarchicalRowsEnabled="True"
+                                      SelectionChanged="OnLuaEditorSectionSelectionChanged"
+                                      CanUserSortColumns="False"
+                                      CanUserResizeColumns="False"
+                                      HeadersVisibility="None"
+                                      GridLinesVisibility="None"
+                                      UseLogicalScrollable="True">
+                                <DataGrid.Columns>
+                                    <DataGridHierarchicalColumn Header="Section"
+                                                                Width="*"
+                                                                Indent="8"
+                                                                x:CompileBindings="False">
+                                        <DataGridHierarchicalColumn.CellTemplate>
+                                            <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                <TextBlock Text="{Binding Item.DisplayLabel}" />
+                                            </DataTemplate>
+                                        </DataGridHierarchicalColumn.CellTemplate>
+                                    </DataGridHierarchicalColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </Border>
 
-                <TextBlock Grid.Row="3"
-                           x:Name="LuaEditorStatusText"
-                           Text="Ln 1, Col 1" />
+                    <GridSplitter Grid.Column="1"
+                                  Width="6"
+                                  HorizontalAlignment="Stretch"
+                                  VerticalAlignment="Stretch"
+                                  ResizeDirection="Columns"
+                                  Background="#505050" />
+
+                    <Border Grid.Column="2"
+                            BorderThickness="1"
+                            BorderBrush="#909090"
+                            CornerRadius="3"
+                            Padding="1">
+                        <ae:TextEditor x:Name="LuaSourceEditor"
+                                       FontFamily="Consolas, Courier New, monospace"
+                                       FontSize="16"
+                                       ShowLineNumbers="True"
+                                       WordWrap="False"
+                                       HorizontalScrollBarVisibility="Auto"
+                                       VerticalScrollBarVisibility="Auto" />
+                    </Border>
+                </Grid>
+
+                <Border Grid.Row="3"
+                        BorderThickness="1"
+                        BorderBrush="#505050"
+                        CornerRadius="3">
+                    <Grid ColumnDefinitions="*,130,160,58,66,74">
+                        <StackPanel Grid.Column="0"
+                                    Orientation="Horizontal">
+                            <Border BorderThickness="0,0,1,0"
+                                    BorderBrush="#505050"
+                                    Padding="8,2">
+                                <TextBlock x:Name="LuaEditorStatusSourceText"
+                                           TextTrimming="CharacterEllipsis"
+                                           Text="script.lua" />
+                            </Border>
+                            <Border BorderThickness="0,0,1,0"
+                                    BorderBrush="#505050"
+                                    Padding="8,2">
+                                <TextBlock x:Name="LuaEditorStatusModeText"
+                                           Text="plain" />
+                            </Border>
+                            <Border BorderThickness="0,0,1,0"
+                                    BorderBrush="#505050"
+                                    Padding="8,2">
+                                <TextBlock x:Name="LuaEditorStatusSectionText"
+                                           TextTrimming="CharacterEllipsis"
+                                           Text="section -" />
+                            </Border>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                BorderThickness="0,0,1,0"
+                                BorderBrush="#505050"
+                                Padding="8,2">
+                            <TextBlock x:Name="LuaEditorStatusSelectionBytesText"
+                                       Text="Sel 0 B" />
+                        </Border>
+
+                        <Border Grid.Column="2"
+                                BorderThickness="0,0,1,0"
+                                BorderBrush="#505050"
+                                Padding="8,2">
+                            <TextBlock x:Name="LuaEditorStatusCaretText"
+                                       Text="Ln 1, Col 1" />
+                        </Border>
+
+                        <Border Grid.Column="3"
+                                BorderThickness="0,0,1,0"
+                                BorderBrush="#505050"
+                                Padding="8,2">
+                            <TextBlock x:Name="LuaEditorStatusInsertModeText"
+                                       HorizontalAlignment="Right"
+                                       Text="INS" />
+                        </Border>
+
+                        <Border Grid.Column="4"
+                                BorderThickness="0,0,1,0"
+                                BorderBrush="#505050"
+                                Padding="8,2">
+                            <TextBlock x:Name="LuaEditorStatusEolText"
+                                       HorizontalAlignment="Right"
+                                       Text="LF" />
+                        </Border>
+
+                        <Border Grid.Column="5"
+                                Padding="8,2">
+                            <TextBlock x:Name="LuaEditorStatusEncodingText"
+                                       HorizontalAlignment="Right"
+                                       Text="UTF-8" />
+                        </Border>
+                    </Grid>
+                </Border>
             </Grid>
         </Border>
 

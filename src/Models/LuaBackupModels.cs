@@ -2,7 +2,7 @@
 // - LuaBackupCreateRequest: Captures editor/script metadata needed to create versioned backup snapshots.
 // - LuaBackupEntry: Metadata row used by backup manager grid.
 // - LuaBackupDocument: Loaded backup payload and parsed script content.
-namespace MyDu.Models;
+namespace myDUWorker.Models;
 
 using System;
 

@@ -1,7 +1,7 @@
 // Helper Index:
 // - LuaPropertyRawRecord: Raw element_property row data used for optimistic DB updates.
 // - LuaDbSaveResult: Save outcome metadata used to refresh editor DB baseline state.
-namespace MyDu.Models;
+namespace myDUWorker.Models;
 
 public sealed record LuaPropertyRawRecord(
     ulong ElementId,

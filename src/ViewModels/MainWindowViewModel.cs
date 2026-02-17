@@ -8,8 +8,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Media;
-using MyDu.Models;
-using MyDu.Services;
+using myDUWorker.Models;
+using myDUWorker.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -22,10 +22,15 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace MyDu.ViewModels;
+namespace myDUWorker.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
+    private const string LuaPartNodeKindPrefix = "Part:";
+    private const int AutoConnectRetryMinSeconds = 10;
+    private const int AutoConnectRetryMaxSeconds = 9999;
+    private const int AutoConnectRetryDefaultSeconds = 30;
+
     public sealed record BlobSaveRequest(string SuggestedFileName, string Content, string DefaultExtension);
     public sealed record LuaEditorSourceContext(
         ulong? ElementId,
@@ -36,8 +41,10 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private readonly MyDuDataService _dataService = new();
     private readonly WorkbenchSettingsService _settingsService = new();
+    private readonly SemaphoreSlim _databaseConnectGate = new(1, 1);
     private DatabaseConstructSnapshot? _lastSnapshot;
     private EndpointProbeResult? _lastEndpointResult;
+    private CancellationTokenSource? _autoConnectCts;
     private CancellationTokenSource? _constructSearchCts;
     private CancellationTokenSource? _playerSearchCts;
     private bool _isRestoringSettings;
@@ -52,6 +59,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private string _selectedDatabankNodeKey = string.Empty;
     private Dictionary<string, string> _gridColumnWidths = new(StringComparer.Ordinal);
     private readonly List<ElementPropertyRecord> _allRegularProperties = new();
+    private readonly List<PlayerNameLookupRecord> _allPlayerNameSuggestions = new();
     private Dictionary<string, bool> _elementPropertyActiveStates = new(StringComparer.OrdinalIgnoreCase);
     private WindowPlacementSettings _windowPlacement = new();
 
@@ -126,6 +134,18 @@ public partial class MainWindowViewModel : ViewModelBase
     private bool autoLoadOnStartup = true;
 
     [ObservableProperty]
+    private bool autoLoadPlayerNames = true;
+
+    [ObservableProperty]
+    private bool limitToSelectedPlayerConstructs = true;
+
+    [ObservableProperty]
+    private bool autoConnectDatabase;
+
+    [ObservableProperty]
+    private int autoConnectRetrySeconds = AutoConnectRetryDefaultSeconds;
+
+    [ObservableProperty]
     private bool autoWrapContent;
 
     [ObservableProperty]
@@ -138,10 +158,16 @@ public partial class MainWindowViewModel : ViewModelBase
     private string lastSavedFolder = string.Empty;
 
     [ObservableProperty]
-    private string statusMessage = "Ready.";
+    private string statusMessage = "Checking database connection...";
+
+    [ObservableProperty]
+    private string activeConstructName = string.Empty;
 
     [ObservableProperty]
     private string databaseAvailabilityStatus = "Checking...";
+
+    [ObservableProperty]
+    private int? autoConnectNextRetrySeconds;
 
     [ObservableProperty]
     private string databaseSummary = string.Empty;
@@ -180,6 +206,8 @@ public partial class MainWindowViewModel : ViewModelBase
     public bool CanSaveSelectedLuaBlob => IsLuaSaveNode(ResolveSelectedTreeRow(SelectedDpuyaml6Node));
     public bool CanSaveSelectedHtmlRsBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedContent2Node));
     public bool CanSaveSelectedDatabankBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedDatabankNode));
+    public string DatabaseAvailabilityDisplay => BuildDatabaseAvailabilityDisplay();
+    public string SelectedPlayerIdDisplay => SelectedPlayerNameSuggestion?.PlayerId?.ToString(CultureInfo.InvariantCulture) ?? "-";
 
     public MainWindowViewModel()
     {
@@ -203,6 +231,7 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             await ProbeDatabaseAvailabilityAsync(CancellationToken.None);
+            RefreshAutoConnectLoopState();
 
             if (!string.Equals(DatabaseAvailabilityStatus, "Ok", StringComparison.OrdinalIgnoreCase))
             {
@@ -214,7 +243,11 @@ public partial class MainWindowViewModel : ViewModelBase
                 await LoadDatabaseAsync();
             }
 
-            if (CountSearchCharacters(PlayerNameSearchInput) >= 3)
+            if (AutoLoadPlayerNames)
+            {
+                QueuePlayerNameCacheRefresh(forceReload: false);
+            }
+            else if (CountSearchCharacters(PlayerNameSearchInput) >= 3)
             {
                 QueuePlayerNameSearch(PlayerNameSearchInput);
             }
@@ -227,6 +260,18 @@ public partial class MainWindowViewModel : ViewModelBase
         finally
         {
             _isStartupInitializing = false;
+            RefreshAutoConnectLoopState();
+        }
+    }
+
+    [RelayCommand]
+    private async Task ConnectDatabaseAsync()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        bool connected = await TryConnectDatabaseAsync(cts.Token, initiatedByAutoConnect: false);
+        if (!connected)
+        {
+            StatusMessage = "Database is offline.";
         }
     }
 
@@ -258,6 +303,9 @@ public partial class MainWindowViewModel : ViewModelBase
                 cts.Token);
 
             _lastSnapshot = snapshot;
+            ActiveConstructName = string.IsNullOrWhiteSpace(snapshot.ConstructName)
+                ? snapshot.ConstructId.ToString(CultureInfo.InvariantCulture)
+                : snapshot.ConstructName;
             UpdateDatabaseSummary(snapshot);
 
             List<ElementPropertyRecord> regularProperties = new();
@@ -612,6 +660,10 @@ public partial class MainWindowViewModel : ViewModelBase
         SelectedElementTypeFilterHistoryItem = null;
 
         AutoLoadOnStartup = settings.AutoLoadOnStartup;
+        AutoLoadPlayerNames = settings.AutoLoadPlayerNames;
+        LimitToSelectedPlayerConstructs = settings.LimitToSelectedPlayerConstructs;
+        AutoConnectDatabase = settings.AutoConnectDatabase;
+        AutoConnectRetrySeconds = ClampAutoConnectRetrySeconds(settings.AutoConnectRetrySeconds);
         AutoWrapContent = settings.AutoWrapContent;
         AutoCollapseToFirstLevel = settings.AutoCollapseToFirstLevel;
         LuaVersioningEnabled = settings.LuaVersioningEnabled;
@@ -674,6 +726,10 @@ public partial class MainWindowViewModel : ViewModelBase
             ElementTypeNameFilterInput = ElementTypeNameFilterInput,
             ElementTypeFilterHistory = ElementTypeFilterHistory.ToList(),
             AutoLoadOnStartup = AutoLoadOnStartup,
+            AutoLoadPlayerNames = AutoLoadPlayerNames,
+            LimitToSelectedPlayerConstructs = LimitToSelectedPlayerConstructs,
+            AutoConnectDatabase = AutoConnectDatabase,
+            AutoConnectRetrySeconds = ClampAutoConnectRetrySeconds(AutoConnectRetrySeconds),
             AutoWrapContent = AutoWrapContent,
             AutoCollapseToFirstLevel = AutoCollapseToFirstLevel,
             LuaVersioningEnabled = LuaVersioningEnabled,
@@ -748,11 +804,193 @@ public partial class MainWindowViewModel : ViewModelBase
                 TimeSpan.FromSeconds(5),
                 cancellationToken);
             DatabaseAvailabilityStatus = available ? "Ok" : "Offline";
+            SyncReadyStatusWithConnectionState(available);
         }
         catch
         {
             DatabaseAvailabilityStatus = "Offline";
+            SyncReadyStatusWithConnectionState(false);
         }
+    }
+
+    private void SyncReadyStatusWithConnectionState(bool isConnected)
+    {
+        if (isConnected)
+        {
+            if (string.Equals(StatusMessage, "Checking database connection...", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(StatusMessage, "Database offline.", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(StatusMessage, "Database is offline.", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(StatusMessage, "Ready.", StringComparison.OrdinalIgnoreCase))
+            {
+                StatusMessage = "Ready.";
+            }
+
+            return;
+        }
+
+        if (string.Equals(StatusMessage, "Checking database connection...", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(StatusMessage, "Ready.", StringComparison.OrdinalIgnoreCase))
+        {
+            StatusMessage = "Database offline.";
+        }
+    }
+
+    private async Task<bool> TryConnectDatabaseAsync(CancellationToken cancellationToken, bool initiatedByAutoConnect)
+    {
+        bool lockTaken = false;
+        try
+        {
+            await _databaseConnectGate.WaitAsync(cancellationToken);
+            lockTaken = true;
+            await ProbeDatabaseAvailabilityAsync(cancellationToken);
+            bool connected = IsDatabaseOnline();
+            if (connected)
+            {
+                StatusMessage = initiatedByAutoConnect
+                    ? "Database auto-connect succeeded."
+                    : "Database connection is available.";
+            }
+
+            return connected;
+        }
+        catch (OperationCanceledException)
+        {
+            return IsDatabaseOnline();
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                _databaseConnectGate.Release();
+            }
+
+            RefreshAutoConnectLoopState();
+        }
+    }
+
+    private void RefreshAutoConnectLoopState()
+    {
+        if (!AutoConnectDatabase || IsDatabaseOnline())
+        {
+            StopAutoConnectLoop();
+            return;
+        }
+
+        if (string.Equals(DatabaseAvailabilityStatus, "Checking...", StringComparison.OrdinalIgnoreCase))
+        {
+            AutoConnectNextRetrySeconds = null;
+            return;
+        }
+
+        StartAutoConnectLoop();
+    }
+
+    private void StartAutoConnectLoop()
+    {
+        if (_autoConnectCts is not null)
+        {
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _autoConnectCts = cts;
+        _ = RunAutoConnectLoopAsync(cts);
+    }
+
+    private void StopAutoConnectLoop()
+    {
+        CancellationTokenSource? cts = _autoConnectCts;
+        if (cts is null)
+        {
+            AutoConnectNextRetrySeconds = null;
+            return;
+        }
+
+        _autoConnectCts = null;
+        AutoConnectNextRetrySeconds = null;
+        cts.Cancel();
+    }
+
+    private async Task RunAutoConnectLoopAsync(CancellationTokenSource cts)
+    {
+        try
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                int retrySeconds = ClampAutoConnectRetrySeconds(AutoConnectRetrySeconds);
+                for (int remaining = retrySeconds; remaining > 0; remaining--)
+                {
+                    AutoConnectNextRetrySeconds = remaining;
+                    await Task.Delay(TimeSpan.FromSeconds(1), cts.Token);
+
+                    if (cts.IsCancellationRequested || !AutoConnectDatabase || IsDatabaseOnline())
+                    {
+                        break;
+                    }
+                }
+
+                AutoConnectNextRetrySeconds = null;
+
+                if (cts.IsCancellationRequested || !AutoConnectDatabase || IsDatabaseOnline())
+                {
+                    break;
+                }
+
+                bool connected = await TryConnectDatabaseAsync(cts.Token, initiatedByAutoConnect: true);
+                if (connected)
+                {
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(_autoConnectCts, cts))
+            {
+                _autoConnectCts = null;
+            }
+
+            AutoConnectNextRetrySeconds = null;
+            cts.Dispose();
+        }
+    }
+
+    private bool IsDatabaseOnline()
+    {
+        return string.Equals(DatabaseAvailabilityStatus, "Ok", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string BuildDatabaseAvailabilityDisplay()
+    {
+        if (!string.Equals(DatabaseAvailabilityStatus, "Offline", StringComparison.OrdinalIgnoreCase))
+        {
+            return DatabaseAvailabilityStatus;
+        }
+
+        if (!AutoConnectDatabase || !AutoConnectNextRetrySeconds.HasValue)
+        {
+            return "Offline";
+        }
+
+        return $"Offline (next check in {AutoConnectNextRetrySeconds.Value}s)";
+    }
+
+    private static int ClampAutoConnectRetrySeconds(int value)
+    {
+        if (value < AutoConnectRetryMinSeconds)
+        {
+            return AutoConnectRetryMinSeconds;
+        }
+
+        if (value > AutoConnectRetryMaxSeconds)
+        {
+            return AutoConnectRetryMaxSeconds;
+        }
+
+        return value;
     }
 
     private static int ParsePort(string? value)
@@ -1110,26 +1348,125 @@ public partial class MainWindowViewModel : ViewModelBase
             return rows;
         }
 
+        var groupedSections = new Dictionary<string, List<(string EventLabel, string Content)>>(StringComparer.Ordinal);
+        var componentDisplayByKey = new Dictionary<string, string>(StringComparer.Ordinal);
         int index = 0;
         foreach ((string title, string content) in sections)
         {
             index++;
-            string partLabel = string.IsNullOrWhiteSpace(title)
-                ? $"part_{index:000}"
-                : title;
-            rows.Add(new PropertyTreeRow(
-                partLabel,
-                "Part",
+            (string componentDisplay, string eventLabel) = SplitLuaSectionTitle(title, index);
+            string componentKey = NormalizeLuaComponentKey(componentDisplay);
+            if (!groupedSections.TryGetValue(componentKey, out List<(string EventLabel, string Content)>? componentRows))
+            {
+                componentRows = new List<(string EventLabel, string Content)>();
+                groupedSections[componentKey] = componentRows;
+                componentDisplayByKey[componentKey] = componentDisplay;
+            }
+
+            componentRows.Add((eventLabel, content));
+        }
+
+        foreach (string componentKey in OrderLuaComponentKeys(groupedSections.Keys))
+        {
+            string componentDisplay = componentDisplayByKey[componentKey];
+            List<(string EventLabel, string Content)> componentSections = groupedSections[componentKey];
+            var componentNode = new PropertyTreeRow(
+                componentDisplay,
+                "Component",
                 record.ElementId,
                 record.ElementDisplayName,
                 record.Name,
                 record.PropertyType,
                 record.ByteLength,
-                BuildPreview(content),
-                content));
+                $"{componentSections.Count.ToString(CultureInfo.InvariantCulture)} handlers",
+                string.Empty);
+
+            foreach ((string eventLabel, string content) in componentSections)
+            {
+                componentNode.Children.Add(new PropertyTreeRow(
+                    eventLabel,
+                    LuaPartNodeKindPrefix + componentKey,
+                    record.ElementId,
+                    record.ElementDisplayName,
+                    record.Name,
+                    record.PropertyType,
+                    record.ByteLength,
+                    BuildPreview(content),
+                    content));
+            }
+
+            rows.Add(componentNode);
         }
 
         return rows;
+    }
+
+    private static (string ComponentDisplay, string EventLabel) SplitLuaSectionTitle(string title, int index)
+    {
+        string normalized = title?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+        {
+            return ("misc", $"handler_{index:000}");
+        }
+
+        int separatorIndex = normalized.IndexOf(" / ", StringComparison.Ordinal);
+        if (separatorIndex > 0 && separatorIndex + 3 < normalized.Length)
+        {
+            string component = normalized[..separatorIndex].Trim();
+            string eventLabel = normalized[(separatorIndex + 3)..].Trim();
+            if (component.Length > 0 && eventLabel.Length > 0)
+            {
+                return (component, eventLabel);
+            }
+        }
+
+        return ("misc", normalized);
+    }
+
+    private static string NormalizeLuaComponentKey(string componentDisplay)
+    {
+        string normalized = (componentDisplay ?? string.Empty).Trim().ToLowerInvariant();
+        normalized = Regex.Replace(normalized, "\\s+", " ");
+        return string.IsNullOrWhiteSpace(normalized) ? "misc" : normalized;
+    }
+
+    private static IReadOnlyList<string> OrderLuaComponentKeys(IEnumerable<string> componentKeys)
+    {
+        return componentKeys
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(GetLuaComponentSortRank)
+            .ThenBy(key => key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static int GetLuaComponentSortRank(string key)
+    {
+        return key switch
+        {
+            "library" => 0,
+            "system" => 1,
+            "player" => 2,
+            "construct" => 3,
+            "unit" => 4,
+            _ => TryGetSlotSortRank(key)
+        };
+    }
+
+    private static int TryGetSlotSortRank(string key)
+    {
+        if (!key.StartsWith("slot", StringComparison.OrdinalIgnoreCase))
+        {
+            return 1000;
+        }
+
+        ReadOnlySpan<char> suffix = key.AsSpan(4).Trim();
+        if (!int.TryParse(suffix, NumberStyles.Integer, CultureInfo.InvariantCulture, out int slotNumber) ||
+            slotNumber <= 0)
+        {
+            return 1000;
+        }
+
+        return 100 + slotNumber;
     }
 
     private static IReadOnlyList<PropertyTreeRow> BuildContentPartRows(ElementPropertyRecord record)
@@ -1648,19 +1985,52 @@ public partial class MainWindowViewModel : ViewModelBase
     public bool TryGetSelectedLuaEditorSourceContext(out LuaEditorSourceContext? context)
     {
         context = null;
-        PropertyTreeRow? row = ResolveSelectedTreeRow(SelectedDpuyaml6Node);
+        object? selectedNode = SelectedDpuyaml6Node;
+        PropertyTreeRow? row = ResolveSelectedTreeRow(selectedNode);
         if (!IsLuaSaveNode(row))
         {
             return false;
         }
 
+        string nodeLabelForContext = ResolveLuaNodeLabelForContext(selectedNode, row!);
         context = new LuaEditorSourceContext(
             row!.ElementId,
             row.ElementDisplayName ?? string.Empty,
-            row.NodeLabel ?? string.Empty,
+            nodeLabelForContext,
             row.PropertyName ?? string.Empty,
             BuildSuggestedFileName(row, ".lua"));
         return true;
+    }
+
+    private static string ResolveLuaNodeLabelForContext(object? selectedNode, PropertyTreeRow row)
+    {
+        string nodeLabel = row.NodeLabel ?? string.Empty;
+        if (!row.NodeKind.StartsWith(LuaPartNodeKindPrefix, StringComparison.Ordinal))
+        {
+            return nodeLabel;
+        }
+
+        string? componentLabel = selectedNode switch
+        {
+            HierarchicalNode<PropertyTreeRow> typedNode =>
+                typedNode.Parent?.Item is PropertyTreeRow parentTypedRow &&
+                string.Equals(parentTypedRow.NodeKind, "Component", StringComparison.Ordinal)
+                    ? parentTypedRow.NodeLabel
+                    : null,
+            HierarchicalNode untypedNode =>
+                untypedNode.Parent?.Item is PropertyTreeRow parentRow &&
+                string.Equals(parentRow.NodeKind, "Component", StringComparison.Ordinal)
+                    ? parentRow.NodeLabel
+                    : null,
+            _ => null
+        };
+
+        if (string.IsNullOrWhiteSpace(componentLabel))
+        {
+            return nodeLabel;
+        }
+
+        return $"{componentLabel} / {nodeLabel}";
     }
 
     public bool TryGetSelectedHtmlRsBlobSaveRequest(out BlobSaveRequest? request)
@@ -1705,7 +2075,8 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         return string.Equals(row.NodeKind, "Block", StringComparison.Ordinal) ||
-               string.Equals(row.NodeKind, "Part", StringComparison.Ordinal);
+               string.Equals(row.NodeKind, "Part", StringComparison.Ordinal) ||
+               row.NodeKind.StartsWith(LuaPartNodeKindPrefix, StringComparison.Ordinal);
     }
 
     private static string BuildSuggestedFileName(PropertyTreeRow row, string extension)
@@ -1952,8 +2323,26 @@ public partial class MainWindowViewModel : ViewModelBase
         await LoadDatabaseAsync();
     }
 
+    [RelayCommand]
+    private void RefreshPlayerNames()
+    {
+        QueuePlayerNameCacheRefresh(forceReload: true);
+    }
+
     private void QueuePlayerNameSearch(string? input)
     {
+        if (_allPlayerNameSuggestions.Count > 0)
+        {
+            ApplyPlayerNameFilter(input);
+            return;
+        }
+
+        if (AutoLoadPlayerNames)
+        {
+            QueuePlayerNameCacheRefresh(forceReload: false);
+            return;
+        }
+
         _playerSearchCts?.Cancel();
         _playerSearchCts?.Dispose();
         _playerSearchCts = null;
@@ -1969,10 +2358,96 @@ public partial class MainWindowViewModel : ViewModelBase
         PlayerSearchStatus = "Searching...";
         var cts = new CancellationTokenSource();
         _playerSearchCts = cts;
-        _ = RefreshPlayerNameSuggestionsAsync(input!, cts.Token);
+        _ = RefreshPlayerNameSuggestionsFromDatabaseAsync(input!, cts.Token);
     }
 
-    private async Task RefreshPlayerNameSuggestionsAsync(string input, CancellationToken cancellationToken)
+    private void QueuePlayerNameCacheRefresh(bool forceReload)
+    {
+        if (!forceReload && _allPlayerNameSuggestions.Count > 0)
+        {
+            ApplyPlayerNameFilter(PlayerNameSearchInput);
+            return;
+        }
+
+        _playerSearchCts?.Cancel();
+        _playerSearchCts?.Dispose();
+        _playerSearchCts = null;
+
+        PlayerSearchStatus = "Loading players...";
+        var cts = new CancellationTokenSource();
+        _playerSearchCts = cts;
+        _ = RefreshAllPlayerNamesAsync(cts.Token);
+    }
+
+    private async Task RefreshAllPlayerNamesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            DataConnectionOptions options = BuildDbOptions();
+            IReadOnlyList<PlayerNameLookupRecord> results = await _dataService.GetPlayersSortedByNameAsync(
+                options,
+                cancellationToken);
+
+            _allPlayerNameSuggestions.Clear();
+            _allPlayerNameSuggestions.AddRange(results);
+
+            ApplyPlayerNameFilter(PlayerNameSearchInput);
+            if (LimitToSelectedPlayerConstructs && SelectedPlayerNameSuggestion?.PlayerId.HasValue == true)
+            {
+                QueueConstructNameSearch(ConstructNameSearchInput);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            PlayerSearchStatus = "Load failed";
+            StatusMessage = $"Player list load failed: {ex.Message}";
+        }
+    }
+
+    private void ApplyPlayerNameFilter(string? input)
+    {
+        string normalizedFilter = input?.Trim() ?? string.Empty;
+        ulong? selectedPlayerId = SelectedPlayerNameSuggestion?.PlayerId ?? TryParseOptionalUlong(PlayerIdInput);
+
+        IEnumerable<PlayerNameLookupRecord> filtered = _allPlayerNameSuggestions;
+        if (!string.IsNullOrWhiteSpace(normalizedFilter))
+        {
+            filtered = filtered.Where(player =>
+                MatchesWildcardPattern(player.PlayerName, normalizedFilter) ||
+                (player.PlayerId.HasValue &&
+                 MatchesWildcardPattern(player.PlayerId.Value.ToString(CultureInfo.InvariantCulture), normalizedFilter)));
+        }
+
+        PlayerNameSuggestions.Clear();
+        foreach (PlayerNameLookupRecord player in filtered)
+        {
+            PlayerNameSuggestions.Add(player);
+        }
+
+        if (selectedPlayerId.HasValue)
+        {
+            PlayerNameLookupRecord? matched = PlayerNameSuggestions.FirstOrDefault(p => p.PlayerId == selectedPlayerId.Value);
+            if (matched is not null)
+            {
+                SelectedPlayerNameSuggestion = matched;
+            }
+        }
+
+        if (_allPlayerNameSuggestions.Count == 0)
+        {
+            PlayerSearchStatus = string.Empty;
+            return;
+        }
+
+        PlayerSearchStatus = string.IsNullOrWhiteSpace(normalizedFilter)
+            ? $"{PlayerNameSuggestions.Count} loaded"
+            : $"{PlayerNameSuggestions.Count} of {_allPlayerNameSuggestions.Count} loaded";
+    }
+
+    private async Task RefreshPlayerNameSuggestionsFromDatabaseAsync(string input, CancellationToken cancellationToken)
     {
         try
         {
@@ -2014,16 +2489,15 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private bool TryGetScopedPlayerId(out ulong playerId)
     {
+        if (!LimitToSelectedPlayerConstructs)
+        {
+            playerId = 0UL;
+            return false;
+        }
+
         if (SelectedPlayerNameSuggestion?.PlayerId.HasValue == true)
         {
             playerId = SelectedPlayerNameSuggestion.PlayerId.Value;
-            return true;
-        }
-
-        ulong? parsed = TryParseOptionalUlong(PlayerIdInput);
-        if (parsed.HasValue)
-        {
-            playerId = parsed.Value;
             return true;
         }
 
@@ -2180,6 +2654,8 @@ public partial class MainWindowViewModel : ViewModelBase
 
     partial void OnPlayerIdInputChanged(string value)
     {
+        OnPropertyChanged(nameof(SelectedPlayerIdDisplay));
+
         if (!_isRestoringSettings && !_isStartupInitializing)
         {
             RefreshConstructSuggestionsForCurrentPlayer();
@@ -2233,6 +2709,65 @@ public partial class MainWindowViewModel : ViewModelBase
     {
     }
 
+    partial void OnAutoLoadPlayerNamesChanged(bool value)
+    {
+        if (_isRestoringSettings || _isStartupInitializing)
+        {
+            return;
+        }
+
+        if (value && _allPlayerNameSuggestions.Count == 0)
+        {
+            QueuePlayerNameCacheRefresh(forceReload: false);
+        }
+
+        PersistSettingsNow();
+    }
+
+    partial void OnLimitToSelectedPlayerConstructsChanged(bool value)
+    {
+        if (_isRestoringSettings || _isStartupInitializing)
+        {
+            return;
+        }
+
+        QueueConstructNameSearch(ConstructNameSearchInput);
+        PersistSettingsNow();
+    }
+
+    partial void OnAutoConnectDatabaseChanged(bool value)
+    {
+        RefreshAutoConnectLoopState();
+        OnPropertyChanged(nameof(DatabaseAvailabilityDisplay));
+
+        if (_isRestoringSettings || _isStartupInitializing)
+        {
+            return;
+        }
+
+        PersistSettingsNow();
+    }
+
+    partial void OnAutoConnectRetrySecondsChanged(int value)
+    {
+        int clamped = ClampAutoConnectRetrySeconds(value);
+        if (clamped != value)
+        {
+            AutoConnectRetrySeconds = clamped;
+            return;
+        }
+
+        RefreshAutoConnectLoopState();
+        OnPropertyChanged(nameof(DatabaseAvailabilityDisplay));
+
+        if (_isRestoringSettings || _isStartupInitializing)
+        {
+            return;
+        }
+
+        PersistSettingsNow();
+    }
+
     partial void OnAutoWrapContentChanged(bool value)
     {
         OnPropertyChanged(nameof(ContentTextWrapping));
@@ -2246,8 +2781,37 @@ public partial class MainWindowViewModel : ViewModelBase
     {
     }
 
+    partial void OnDatabaseAvailabilityStatusChanged(string value)
+    {
+        if (AutoLoadPlayerNames &&
+            string.Equals(value, "Ok", StringComparison.OrdinalIgnoreCase) &&
+            _allPlayerNameSuggestions.Count == 0)
+        {
+            QueuePlayerNameCacheRefresh(forceReload: false);
+        }
+
+        RefreshAutoConnectLoopState();
+        OnPropertyChanged(nameof(DatabaseAvailabilityDisplay));
+    }
+
+    partial void OnAutoConnectNextRetrySecondsChanged(int? value)
+    {
+        OnPropertyChanged(nameof(DatabaseAvailabilityDisplay));
+    }
+
     partial void OnLastSavedFolderChanged(string value)
     {
+        if (_isRestoringSettings || _isStartupInitializing)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        PersistSettingsNow();
     }
 
     partial void OnEndpointTemplateInputChanged(string value)
@@ -2314,6 +2878,12 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             PlayerIdInput = value.PlayerId.Value.ToString(CultureInfo.InvariantCulture);
         }
+        else if (!_isRestoringSettings && !_isStartupInitializing)
+        {
+            PlayerIdInput = string.Empty;
+        }
+
+        OnPropertyChanged(nameof(SelectedPlayerIdDisplay));
 
         if (!_isRestoringSettings && !_isStartupInitializing)
         {

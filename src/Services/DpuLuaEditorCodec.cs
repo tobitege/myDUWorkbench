@@ -19,7 +19,7 @@
 // - Section cardinality must match exactly. Partial matches are rejected to prevent silent partial DB rewrites.
 // - Hash-backed payload absence is explicit. If property_type=7 and referenced blob is missing, fail fast with clear error.
 // - Single-section payloads are intentionally flexible: if exactly one DB section and one edited section exist, body replacement is allowed.
-namespace MyDu.Services;
+namespace myDUWorker.Services;
 
 using K4os.Compression.LZ4;
 using System;
@@ -42,7 +42,6 @@ public sealed record DpuLuaReencodeResult(
 public static class DpuLuaEditorCodec
 {
     private static readonly Regex HashRegex = new("^[0-9a-f]{64}$", RegexOptions.Compiled);
-    private static readonly Regex SafeNameRegex = new("[^A-Za-z0-9._-]+", RegexOptions.Compiled);
     private static readonly Regex SectionHeaderRegex = new(
         "^\\s*-- ===== (?<index>\\d{3}) (?<title>.+?) =====\\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -299,6 +298,7 @@ public static class DpuLuaEditorCodec
     private static List<SectionTarget> ExtractSectionTargets(JsonObject root)
     {
         var sections = new List<SectionTarget>();
+        Dictionary<string, string> slotNameByKey = ExtractSlotNameMap(root);
 
         if (root["handlers"] is JsonArray handlers)
         {
@@ -313,16 +313,25 @@ public static class DpuLuaEditorCodec
 
                 string key = item["key"]?.ToString() ?? idx.ToString(CultureInfo.InvariantCulture);
                 string signature = string.Empty;
+                string slotKey = string.Empty;
+                List<string> filterArgs = ReadFilterArgs(item);
                 if (item["filter"] is JsonObject filter)
                 {
-                    string? sig = filter["signature"]?.GetValue<string>();
-                    if (!string.IsNullOrWhiteSpace(sig))
-                    {
-                        signature = sig;
-                    }
+                    signature = ReadNodeText(filter["signature"]);
+                    slotKey = ReadNodeText(filter["slotKey"]);
                 }
 
-                string title = $"handler_{key}_{SafeName(!string.IsNullOrWhiteSpace(signature) ? signature : $"entry_{idx}")}";
+                if (string.IsNullOrWhiteSpace(signature))
+                {
+                    signature = ReadNodeText(item["signature"]);
+                }
+
+                if (string.IsNullOrWhiteSpace(slotKey))
+                {
+                    slotKey = ReadNodeText(item["slotKey"]);
+                }
+
+                string title = DpuLuaSectionTitleBuilder.BuildHandlerTitle(idx, key, slotKey, signature, filterArgs, slotNameByKey);
                 sections.Add(new SectionTarget(title, item));
             }
         }
@@ -338,8 +347,8 @@ public static class DpuLuaEditorCodec
                     continue;
                 }
 
-                string methodName = item["name"]?.ToString() ?? $"method_{idx}";
-                string title = $"method_{SafeName(methodName)}";
+                string methodName = ReadNodeText(item["name"]);
+                string title = DpuLuaSectionTitleBuilder.BuildMethodTitle(idx, methodName);
                 sections.Add(new SectionTarget(title, item));
             }
         }
@@ -355,8 +364,8 @@ public static class DpuLuaEditorCodec
                     continue;
                 }
 
-                string eventName = item["name"]?.ToString() ?? $"event_{idx}";
-                string title = $"event_{SafeName(eventName)}";
+                string eventName = ReadNodeText(item["name"]);
+                string title = DpuLuaSectionTitleBuilder.BuildEventTitle(idx, eventName);
                 sections.Add(new SectionTarget(title, item));
             }
         }
@@ -364,10 +373,67 @@ public static class DpuLuaEditorCodec
         return sections;
     }
 
-    private static string SafeName(string value)
+    private static Dictionary<string, string> ExtractSlotNameMap(JsonObject root)
     {
-        string cleaned = SafeNameRegex.Replace((value ?? string.Empty).Trim(), "_").Trim('_');
-        return string.IsNullOrEmpty(cleaned) ? "unnamed" : cleaned;
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (root["slots"] is not JsonObject slots)
+        {
+            return map;
+        }
+
+        foreach ((string? slotKey, JsonNode? slotNode) in slots)
+        {
+            if (string.IsNullOrWhiteSpace(slotKey) || slotNode is not JsonObject slotObject)
+            {
+                continue;
+            }
+
+            string slotName = ReadNodeText(slotObject["name"]);
+            if (!string.IsNullOrWhiteSpace(slotName))
+            {
+                map[slotKey] = slotName.Trim();
+            }
+        }
+
+        return map;
+    }
+
+    private static List<string> ReadFilterArgs(JsonObject item)
+    {
+        var args = new List<string>();
+        if (item["filter"] is not JsonObject filter ||
+            filter["args"] is not JsonArray argsArray)
+        {
+            return args;
+        }
+
+        foreach (JsonNode? argNode in argsArray)
+        {
+            if (argNode is JsonObject argObject)
+            {
+                string value = ReadNodeText(argObject["value"]);
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    value = ReadNodeText(argObject["variable"]);
+                }
+
+                args.Add(value);
+                continue;
+            }
+
+            args.Add(ReadNodeText(argNode));
+        }
+
+        return args;
+    }
+
+    private static string ReadNodeText(JsonNode? node)
+    {
+        return node switch
+        {
+            JsonValue valueNode => valueNode.TryGetValue<string>(out string? textValue) ? textValue ?? string.Empty : valueNode.ToJsonString(),
+            _ => string.Empty
+        };
     }
 
     private static bool TryResolveHashBlob(byte[] value, string serverRootPath, out byte[] payload, out string? blobPath)

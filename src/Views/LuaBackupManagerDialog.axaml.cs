@@ -3,15 +3,15 @@
 // - OnLoadIntoEditorClick: Returns selected backup content to caller for editor restore.
 using Avalonia.Controls;
 using Avalonia.Interactivity;
-using MyDu.Models;
-using MyDu.Services;
+using myDUWorker.Models;
+using myDUWorker.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace MyDu.Views;
+namespace myDUWorker.Views;
 
 public sealed record LuaBackupManagerDialogResult(
     string ScriptContent,

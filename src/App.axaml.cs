@@ -8,10 +8,10 @@ using Avalonia.Data.Core;
 using Avalonia.Data.Core.Plugins;
 using System.Linq;
 using Avalonia.Markup.Xaml;
-using MyDu.ViewModels;
-using MyDu.Views;
+using myDUWorker.ViewModels;
+using myDUWorker.Views;
 
-namespace MyDu;
+namespace myDUWorker;
 
 public partial class App : Application
 {

@@ -1,0 +1,40 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="myDUWorker.Views.LuaPersistenceCleanupDialog"
+        Title="Invalid characters detected"
+        Width="620"
+        MinWidth="560"
+        Height="260"
+        MinHeight="240"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    <Grid Margin="14"
+          RowDefinitions="Auto,*,Auto"
+          RowSpacing="10">
+        <TextBlock Grid.Row="0"
+                   FontWeight="SemiBold"
+                   Text="Some characters in this LUA content cannot be saved safely." />
+
+        <StackPanel Grid.Row="1"
+                    Spacing="8">
+            <TextBlock x:Name="IssueSummaryText"
+                       TextWrapping="Wrap"
+                       Text="Invalid character summary" />
+            <TextBlock x:Name="ActionSummaryText"
+                       TextWrapping="Wrap"
+                       Text="Choose how to continue." />
+        </StackPanel>
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <Button Content="Remove invalid chars"
+                    Click="OnRemoveInvalidClick" />
+            <Button Content="Replace invalid chars with blanks"
+                    Click="OnReplaceInvalidClick" />
+            <Button Content="Cancel save"
+                    Click="OnCancelClick" />
+        </StackPanel>
+    </Grid>
+</Window>
