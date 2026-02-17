@@ -250,6 +250,79 @@ public sealed class MyDuDataService
             verifiedSections);
     }
 
+    public async Task<DestroyedRepairResult> RepairDestroyedPropertiesAsync(
+        DataConnectionOptions options,
+        ulong constructId,
+        IProgress<DestroyedRepairProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (constructId == 0UL)
+        {
+            throw new ArgumentOutOfRangeException(nameof(constructId), "Construct id must be > 0.");
+        }
+
+        await using var connection = new NpgsqlConnection(BuildConnectionString(options));
+        await connection.OpenAsync(cancellationToken);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        const string selectSql = """
+            SELECT ep.element_id, ep.name
+            FROM element_property ep
+            JOIN element e ON e.id = ep.element_id
+            WHERE e.construct_id = @constructId
+              AND lower(ep.name) IN ('destroyed', 'restorecount')
+            ORDER BY ep.element_id, ep.name;
+            """;
+        await using var selectCommand = new NpgsqlCommand(selectSql, connection, transaction);
+        selectCommand.Parameters.AddWithValue("constructId", (long)constructId);
+
+        var rows = new List<(ulong ElementId, string PropertyName)>();
+        await using (NpgsqlDataReader reader = await selectCommand.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                ulong elementId = TryGetUInt64(reader, 0) ?? 0UL;
+                string propertyName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+                rows.Add((elementId, propertyName));
+            }
+        }
+
+        int total = rows.Count;
+        if (total == 0)
+        {
+            progress?.Report(new DestroyedRepairProgress(0, 0));
+            await transaction.CommitAsync(cancellationToken);
+            return new DestroyedRepairResult(0, 0);
+        }
+
+        const string deleteSql = """
+            DELETE FROM element_property
+            WHERE element_id = @elementId
+              AND lower(name) = @propertyName;
+            """;
+        await using var deleteCommand = new NpgsqlCommand(deleteSql, connection, transaction);
+        deleteCommand.Parameters.Add("elementId", NpgsqlTypes.NpgsqlDbType.Bigint);
+        deleteCommand.Parameters.Add("propertyName", NpgsqlTypes.NpgsqlDbType.Text);
+
+        int processed = 0;
+        int updated = 0;
+        foreach ((ulong elementId, string propertyName) in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string normalizedPropertyName = propertyName.Trim().ToLowerInvariant();
+            deleteCommand.Parameters["elementId"].Value = (long)elementId;
+            deleteCommand.Parameters["propertyName"].Value = normalizedPropertyName;
+            updated += await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
+
+            processed++;
+            progress?.Report(new DestroyedRepairProgress(processed, total));
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new DestroyedRepairResult(total, updated);
+    }
+
     public async Task<IReadOnlyList<ConstructNameLookupRecord>> SearchConstructsByNameAsync(
         DataConnectionOptions options,
         string searchInput,

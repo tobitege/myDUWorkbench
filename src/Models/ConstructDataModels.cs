@@ -25,6 +25,14 @@ public sealed record ElementPropertyRecord(
     string DecodedValue,
     int ByteLength);
 
+public sealed record DestroyedRepairProgress(
+    int ProcessedCount,
+    int TotalCount);
+
+public sealed record DestroyedRepairResult(
+    int TotalCount,
+    int UpdatedCount);
+
 public sealed class PropertyTreeRow
 {
     public PropertyTreeRow(
@@ -36,7 +44,8 @@ public sealed class PropertyTreeRow
         int? propertyType,
         int? byteLength,
         string valuePreview,
-        string fullContent)
+        string fullContent,
+        string elementName = "")
     {
         NodeLabel = nodeLabel;
         NodeKind = nodeKind;
@@ -47,6 +56,7 @@ public sealed class PropertyTreeRow
         ByteLength = byteLength;
         ValuePreview = valuePreview;
         FullContent = fullContent;
+        ElementName = elementName ?? string.Empty;
     }
 
     public string NodeLabel { get; }
@@ -58,6 +68,7 @@ public sealed class PropertyTreeRow
     public int? ByteLength { get; }
     public string ValuePreview { get; }
     public string FullContent { get; }
+    public string ElementName { get; }
     public ObservableCollection<PropertyTreeRow> Children { get; } = new();
     public string ElementTypeName => StripTrailingLocalId(ElementDisplayName);
 

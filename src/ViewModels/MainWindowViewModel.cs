@@ -61,6 +61,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly List<ElementPropertyRecord> _allRegularProperties = new();
     private readonly List<PlayerNameLookupRecord> _allPlayerNameSuggestions = new();
     private Dictionary<string, bool> _elementPropertyActiveStates = new(StringComparer.OrdinalIgnoreCase);
+    private bool _isBulkUpdatingElementPropertyFilters;
     private WindowPlacementSettings _windowPlacement = new();
 
     public ObservableCollection<ElementPropertyRecord> ElementProperties { get; } = new();
@@ -129,6 +130,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private string? selectedElementTypeFilterHistoryItem;
+
+    [ObservableProperty]
+    private bool damagedOnly;
 
     [ObservableProperty]
     private bool autoLoadOnStartup = true;
@@ -202,10 +206,20 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private bool isBusy;
 
+    [ObservableProperty]
+    private bool repairInProgress;
+
+    [ObservableProperty]
+    private double repairProgressPercent;
+
+    [ObservableProperty]
+    private string repairStatusText = "Repair: idle";
+
     public TextWrapping ContentTextWrapping => AutoWrapContent ? TextWrapping.Wrap : TextWrapping.NoWrap;
     public bool CanSaveSelectedLuaBlob => IsLuaSaveNode(ResolveSelectedTreeRow(SelectedDpuyaml6Node));
     public bool CanSaveSelectedHtmlRsBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedContent2Node));
     public bool CanSaveSelectedDatabankBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedDatabankNode));
+    public bool CanRepairDestroyedElements => !IsBusy && !RepairInProgress && _lastSnapshot is not null && IsDatabaseOnline();
     public string DatabaseAvailabilityDisplay => BuildDatabaseAvailabilityDisplay();
     public string SelectedPlayerIdDisplay => SelectedPlayerNameSuggestion?.PlayerId?.ToString(CultureInfo.InvariantCulture) ?? "-";
 
@@ -217,7 +231,7 @@ public partial class MainWindowViewModel : ViewModelBase
         Content2Model = CreateTreeModel();
         DatabankModel = CreateTreeModel();
 
-        ElementPropertiesModel.SetRoot(CreateRootNode("Elements"));
+        ElementPropertiesModel.SetRoots(Array.Empty<PropertyTreeRow>());
         Dpuyaml6Model.SetRoot(CreateRootNode("LUA blocks"));
         Content2Model.SetRoot(CreateRootNode("HTML/RS"));
         DatabankModel.SetRoot(CreateRootNode("Databank"));
@@ -303,6 +317,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 cts.Token);
 
             _lastSnapshot = snapshot;
+            OnPropertyChanged(nameof(CanRepairDestroyedElements));
             ActiveConstructName = string.IsNullOrWhiteSpace(snapshot.ConstructName)
                 ? snapshot.ConstructId.ToString(CultureInfo.InvariantCulture)
                 : snapshot.ConstructName;
@@ -362,7 +377,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
             if (AutoCollapseToFirstLevel)
             {
-                ElementPropertiesModel.CollapseAll(minDepth: 1);
+                ElementPropertiesModel.CollapseAll(minDepth: 0);
                 Dpuyaml6Model.CollapseAll(minDepth: 1);
                 Content2Model.CollapseAll(minDepth: 1);
                 DatabankModel.CollapseAll(minDepth: 1);
@@ -409,7 +424,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void CollapseAllElementProperties()
     {
-        ElementPropertiesModel.CollapseAll(minDepth: 1);
+        ElementPropertiesModel.CollapseAll(minDepth: 0);
     }
 
     [RelayCommand]
@@ -427,8 +442,20 @@ public partial class MainWindowViewModel : ViewModelBase
         ApplyElementPropertyFilter();
         if (AutoCollapseToFirstLevel)
         {
-            ElementPropertiesModel.CollapseAll(minDepth: 1);
+            ElementPropertiesModel.CollapseAll(minDepth: 0);
         }
+    }
+
+    [RelayCommand]
+    private void CheckAllElementPropertyFilters()
+    {
+        SetAllElementPropertyFilters(isActive: true);
+    }
+
+    [RelayCommand]
+    private void UncheckAllElementPropertyFilters()
+    {
+        SetAllElementPropertyFilters(isActive: false);
     }
 
     [RelayCommand]
@@ -547,6 +574,75 @@ public partial class MainWindowViewModel : ViewModelBase
 
         StatusMessage = "getConstructData export JSON prepared.";
         return json;
+    }
+
+    public async Task RepairDestroyedElementsAsync(CancellationToken cancellationToken)
+    {
+        if (IsBusy || RepairInProgress)
+        {
+            return;
+        }
+
+        if (_lastSnapshot is null)
+        {
+            throw new InvalidOperationException("Load a DB snapshot before running repair.");
+        }
+
+        if (!IsDatabaseOnline())
+        {
+            throw new InvalidOperationException("DB is offline.");
+        }
+
+        try
+        {
+            IsBusy = true;
+            RepairInProgress = true;
+            RepairProgressPercent = 0d;
+            RepairStatusText = "Repair: starting...";
+            StatusMessage = "Repairing element state properties...";
+            await Task.Yield();
+
+            DataConnectionOptions options = BuildDbOptions();
+            ulong constructId = _lastSnapshot.ConstructId;
+
+            var progress = new Progress<DestroyedRepairProgress>(state =>
+            {
+                if (state.TotalCount <= 0)
+                {
+                    RepairProgressPercent = 0d;
+                    RepairStatusText = "Repair: no matching properties found.";
+                    return;
+                }
+
+                RepairProgressPercent = state.ProcessedCount * 100d / state.TotalCount;
+                RepairStatusText = $"Repair: {state.ProcessedCount}/{state.TotalCount}";
+            });
+
+            DestroyedRepairResult result = await _dataService.RepairDestroyedPropertiesAsync(
+                options,
+                constructId,
+                progress,
+                cancellationToken);
+
+            ApplyRepairToLoadedSnapshot();
+
+            if (result.TotalCount == 0)
+            {
+                RepairProgressPercent = 0d;
+                RepairStatusText = "Repair: no matching properties found.";
+                StatusMessage = "Repair finished: no destroyed/restoreCount properties found.";
+                return;
+            }
+
+            RepairProgressPercent = 100d;
+            RepairStatusText = $"Repair complete: {result.UpdatedCount}/{result.TotalCount}";
+            StatusMessage = $"Repair finished: removed {result.UpdatedCount} destroyed/restoreCount row(s).";
+        }
+        finally
+        {
+            RepairInProgress = false;
+            IsBusy = false;
+        }
     }
 
     private static DataConnectionOptions BuildDbOptions(
@@ -701,7 +797,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _selectedContent2NodeKey = settings.SelectedContent2NodeKey ?? string.Empty;
         _selectedDatabankNodeKey = settings.SelectedDatabankNodeKey ?? string.Empty;
         _gridColumnWidths = new Dictionary<string, string>(settings.GridColumnWidths ?? new(), StringComparer.Ordinal);
-        _elementPropertyActiveStates = new Dictionary<string, bool>(settings.ElementPropertyActiveStates ?? new(), StringComparer.OrdinalIgnoreCase);
+        _elementPropertyActiveStates = SanitizeElementPropertyActiveStates(settings.ElementPropertyActiveStates);
         _windowPlacement = CloneWindowPlacement(settings.WindowPlacement);
     }
 
@@ -741,7 +837,7 @@ public partial class MainWindowViewModel : ViewModelBase
             SelectedContent2NodeKey = _selectedContent2NodeKey,
             SelectedDatabankNodeKey = _selectedDatabankNodeKey,
             GridColumnWidths = new Dictionary<string, string>(_gridColumnWidths, StringComparer.Ordinal),
-            ElementPropertyActiveStates = new Dictionary<string, bool>(_elementPropertyActiveStates, StringComparer.OrdinalIgnoreCase),
+            ElementPropertyActiveStates = SanitizeElementPropertyActiveStates(_elementPropertyActiveStates),
             WindowPlacement = CloneWindowPlacement(_windowPlacement)
         };
     }
@@ -1081,8 +1177,76 @@ public partial class MainWindowViewModel : ViewModelBase
             string.Empty);
     }
 
+    private static Dictionary<string, bool> SanitizeElementPropertyActiveStates(IEnumerable<KeyValuePair<string, bool>>? source)
+    {
+        var sanitized = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        if (source is null)
+        {
+            return sanitized;
+        }
+
+        foreach (KeyValuePair<string, bool> entry in source)
+        {
+            string propertyName = NormalizePropertyName(entry.Key);
+            if (string.IsNullOrWhiteSpace(propertyName))
+            {
+                continue;
+            }
+
+            sanitized[propertyName] = entry.Value;
+        }
+
+        return sanitized;
+    }
+
+    private static string NormalizePropertyName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(value.Length);
+        foreach (char ch in value)
+        {
+            if (char.IsControl(ch))
+            {
+                continue;
+            }
+
+            sb.Append(ch);
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    private static bool IsElementNameProperty(string? propertyName)
+    {
+        return string.Equals(
+            NormalizePropertyName(propertyName),
+            "name",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDestroyedPropertyName(string? propertyName)
+    {
+        return string.Equals(
+            NormalizePropertyName(propertyName),
+            "destroyed",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRestoreCountPropertyName(string? propertyName)
+    {
+        return string.Equals(
+            NormalizePropertyName(propertyName),
+            "restoreCount",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     private void RebuildPropertyFilterRows(IReadOnlyList<ElementPropertyRecord> records)
     {
+        _elementPropertyActiveStates = SanitizeElementPropertyActiveStates(_elementPropertyActiveStates);
         foreach (PropertyFilterRecord row in ElementPropertyFilters)
         {
             row.PropertyChanged -= OnElementPropertyFilterChanged;
@@ -1091,8 +1255,9 @@ public partial class MainWindowViewModel : ViewModelBase
         ElementPropertyFilters.Clear();
 
         string[] propertyNames = records
-            .Select(r => r.Name)
+            .Select(r => NormalizePropertyName(r.Name))
             .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Where(n => !IsElementNameProperty(n))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -1128,16 +1293,76 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        _elementPropertyActiveStates[row.PropertyName] = row.IsActive;
+        string propertyName = NormalizePropertyName(row.PropertyName);
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            return;
+        }
+
+        _elementPropertyActiveStates[propertyName] = row.IsActive;
+        if (_isBulkUpdatingElementPropertyFilters)
+        {
+            return;
+        }
+
         ApplyElementPropertyFilter();
+        if (!_isRestoringSettings && !_isStartupInitializing)
+        {
+            PersistSettingsNow();
+        }
+    }
+
+    private void SetAllElementPropertyFilters(bool isActive)
+    {
+        if (ElementPropertyFilters.Count == 0)
+        {
+            return;
+        }
+
+        bool changed = false;
+        _isBulkUpdatingElementPropertyFilters = true;
+        try
+        {
+            foreach (PropertyFilterRecord row in ElementPropertyFilters)
+            {
+                if (row.IsActive == isActive)
+                {
+                    continue;
+                }
+
+                row.IsActive = isActive;
+                changed = true;
+            }
+        }
+        finally
+        {
+            _isBulkUpdatingElementPropertyFilters = false;
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        ApplyElementPropertyFilter();
+        if (!_isRestoringSettings && !_isStartupInitializing)
+        {
+            PersistSettingsNow();
+        }
     }
 
     private void ApplyElementPropertyFilter()
     {
         HashSet<string> activeNames = BuildActivePropertyNameSet();
         string elementTypeFilter = ElementTypeNameFilterInput?.Trim() ?? string.Empty;
+        HashSet<ulong>? damagedElementIds = DamagedOnly
+            ? BuildDamagedElementIdSet(_allRegularProperties)
+            : null;
+
         List<ElementPropertyRecord> filtered = _allRegularProperties
-            .Where(r => activeNames.Contains(r.Name) &&
+            .Where(r => !IsElementNameProperty(r.Name) &&
+                        activeNames.Contains(NormalizePropertyName(r.Name)) &&
+                        (damagedElementIds is null || damagedElementIds.Contains(r.ElementId)) &&
                         MatchesElementTypeFilter(DeriveElementTypeName(r.ElementDisplayName), elementTypeFilter))
             .ToList();
 
@@ -1147,7 +1372,7 @@ public partial class MainWindowViewModel : ViewModelBase
             ElementProperties.Add(record);
         }
 
-        RebuildElementPropertiesTree(_allRegularProperties, activeNames, elementTypeFilter);
+        RebuildElementPropertiesTree(_allRegularProperties, activeNames, elementTypeFilter, damagedElementIds);
         SelectedElementPropertyNode = FindNodeBySelectionKey(ElementPropertiesModel, _selectedElementNodeKey);
     }
 
@@ -1155,7 +1380,8 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         return ElementPropertyFilters
             .Where(f => f.IsActive)
-            .Select(f => f.PropertyName)
+            .Select(f => NormalizePropertyName(f.PropertyName))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -1188,14 +1414,60 @@ public partial class MainWindowViewModel : ViewModelBase
     private void RebuildElementPropertiesTree(
         IReadOnlyList<ElementPropertyRecord> records,
         HashSet<string> activePropertyNames,
-        string elementTypeFilter)
+        string elementTypeFilter,
+        HashSet<ulong>? damagedElementIds)
     {
-        PropertyTreeRow root = CreateRootNode("Elements");
+        var typeRoots = new List<PropertyTreeRow>();
         foreach (IGrouping<string, ElementPropertyRecord> byType in records
                      .GroupBy(r => DeriveElementTypeName(r.ElementDisplayName), StringComparer.OrdinalIgnoreCase)
                      .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
         {
             if (!MatchesElementTypeFilter(byType.Key, elementTypeFilter))
+            {
+                continue;
+            }
+
+            var elementNodes = new List<PropertyTreeRow>();
+
+            foreach (IGrouping<ulong, ElementPropertyRecord> byElement in byType
+                         .OrderBy(r => r.ElementId)
+                         .GroupBy(r => r.ElementId))
+            {
+                if (damagedElementIds is not null && !damagedElementIds.Contains(byElement.Key))
+                {
+                    continue;
+                }
+
+                ElementPropertyRecord first = byElement.First();
+                string elementName = ResolveElementName(byElement);
+                int totalElementProperties = byElement.Count(p => !IsElementNameProperty(p.Name));
+                List<ElementPropertyRecord> visibleProperties = byElement
+                    .Where(p => !IsElementNameProperty(p.Name) &&
+                                activePropertyNames.Contains(NormalizePropertyName(p.Name)))
+                    .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                var elementNode = new PropertyTreeRow(
+                    first.ElementDisplayName,
+                    "Element",
+                    first.ElementId,
+                    first.ElementDisplayName,
+                    string.Empty,
+                    null,
+                    null,
+                    $"{visibleProperties.Count}/{totalElementProperties} properties",
+                    string.Empty,
+                    elementName);
+
+                foreach (ElementPropertyRecord property in visibleProperties)
+                {
+                    elementNode.Children.Add(CreatePropertyLeaf(property, property.Name, "Property", elementName));
+                }
+
+                elementNodes.Add(elementNode);
+            }
+
+            if (elementNodes.Count == 0)
             {
                 continue;
             }
@@ -1208,42 +1480,112 @@ public partial class MainWindowViewModel : ViewModelBase
                 string.Empty,
                 null,
                 null,
-                $"{byType.Select(r => r.ElementId).Distinct().Count()} elements",
+                $"{elementNodes.Count} elements",
                 string.Empty);
 
-            foreach (IGrouping<ulong, ElementPropertyRecord> byElement in byType
-                         .OrderBy(r => r.ElementId)
-                         .GroupBy(r => r.ElementId))
+            foreach (PropertyTreeRow elementNode in elementNodes)
             {
-                ElementPropertyRecord first = byElement.First();
-                List<ElementPropertyRecord> visibleProperties = byElement
-                    .Where(p => activePropertyNames.Contains(p.Name))
-                    .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                var elementNode = new PropertyTreeRow(
-                    first.ElementDisplayName,
-                    "Element",
-                    first.ElementId,
-                    first.ElementDisplayName,
-                    string.Empty,
-                    null,
-                    null,
-                    $"{visibleProperties.Count}/{byElement.Count()} properties",
-                    string.Empty);
-
-                foreach (ElementPropertyRecord property in visibleProperties)
-                {
-                    elementNode.Children.Add(CreatePropertyLeaf(property, property.Name, "Property"));
-                }
-
                 typeNode.Children.Add(elementNode);
             }
 
-            root.Children.Add(typeNode);
+            typeRoots.Add(typeNode);
         }
 
-        ElementPropertiesModel.SetRoot(root);
+        ElementPropertiesModel.SetRoots(typeRoots);
+    }
+
+    private static HashSet<ulong> BuildDamagedElementIdSet(IReadOnlyList<ElementPropertyRecord> records)
+    {
+        var damaged = new HashSet<ulong>();
+        foreach (IGrouping<ulong, ElementPropertyRecord> byElement in records.GroupBy(r => r.ElementId))
+        {
+            bool hasDestroyedTrue = byElement.Any(p =>
+                IsDestroyedPropertyName(p.Name) &&
+                TryReadBooleanTrue(p.DecodedValue));
+            if (hasDestroyedTrue)
+            {
+                damaged.Add(byElement.Key);
+                continue;
+            }
+
+            bool hasRestoreCountPositive = byElement.Any(p =>
+                IsRestoreCountPropertyName(p.Name) &&
+                TryReadPositiveNumber(p.DecodedValue));
+            if (hasRestoreCountPositive)
+            {
+                damaged.Add(byElement.Key);
+            }
+        }
+
+        return damaged;
+    }
+
+    private static bool TryReadBooleanTrue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        string normalized = value.Trim();
+        if (string.Equals(normalized, "1", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(normalized, "0", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return bool.TryParse(normalized, out bool parsed) && parsed;
+    }
+
+    private static bool TryReadPositiveNumber(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        string normalized = value.Trim();
+        if (long.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out long longValue))
+        {
+            return longValue > 0;
+        }
+
+        return double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out double doubleValue) &&
+               doubleValue > 0d;
+    }
+
+    private static string ResolveElementName(IEnumerable<ElementPropertyRecord> properties)
+    {
+        ElementPropertyRecord? nameProperty = properties
+            .FirstOrDefault(p => IsElementNameProperty(p.Name) && !string.IsNullOrWhiteSpace(p.DecodedValue));
+
+        return nameProperty?.DecodedValue?.Trim() ?? string.Empty;
+    }
+
+    private void ApplyRepairToLoadedSnapshot()
+    {
+        if (_lastSnapshot is null)
+        {
+            return;
+        }
+
+        _allRegularProperties.RemoveAll(record =>
+            IsDestroyedPropertyName(record.Name) ||
+            IsRestoreCountPropertyName(record.Name));
+
+        IReadOnlyList<ElementPropertyRecord> snapshotProperties = _lastSnapshot.Properties
+            .Where(record =>
+                !IsDestroyedPropertyName(record.Name) &&
+                !IsRestoreCountPropertyName(record.Name))
+            .ToList();
+
+        _lastSnapshot = _lastSnapshot with { Properties = snapshotProperties };
+        RebuildPropertyFilterRows(_allRegularProperties);
+        ApplyElementPropertyFilter();
     }
 
     private static bool MatchesElementTypeFilter(string elementTypeName, string wildcardFilter)
@@ -1315,7 +1657,11 @@ public partial class MainWindowViewModel : ViewModelBase
         model.SetRoot(root);
     }
 
-    private static PropertyTreeRow CreatePropertyLeaf(ElementPropertyRecord record, string nodeLabel, string nodeKind)
+    private static PropertyTreeRow CreatePropertyLeaf(
+        ElementPropertyRecord record,
+        string nodeLabel,
+        string nodeKind,
+        string elementName = "")
     {
         return new PropertyTreeRow(
             nodeLabel,
@@ -1326,7 +1672,8 @@ public partial class MainWindowViewModel : ViewModelBase
             record.PropertyType,
             record.ByteLength,
             BuildPreview(record.DecodedValue),
-            record.DecodedValue);
+            record.DecodedValue,
+            elementName);
     }
 
     private static IReadOnlyList<PropertyTreeRow> BuildLuaPartRows(ElementPropertyRecord record)
@@ -2694,6 +3041,11 @@ public partial class MainWindowViewModel : ViewModelBase
     {
     }
 
+    partial void OnDamagedOnlyChanged(bool value)
+    {
+        ApplyElementPropertyFilter();
+    }
+
     partial void OnSelectedElementTypeFilterHistoryItemChanged(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -2792,6 +3144,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         RefreshAutoConnectLoopState();
         OnPropertyChanged(nameof(DatabaseAvailabilityDisplay));
+        OnPropertyChanged(nameof(CanRepairDestroyedElements));
     }
 
     partial void OnAutoConnectNextRetrySecondsChanged(int? value)
@@ -2905,5 +3258,15 @@ public partial class MainWindowViewModel : ViewModelBase
         _selectedDatabankNodeKey = BuildSelectionKey(row);
         SelectedDatabankContent = row?.FullContent ?? string.Empty;
         OnPropertyChanged(nameof(CanSaveSelectedDatabankBlob));
+    }
+
+    partial void OnIsBusyChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CanRepairDestroyedElements));
+    }
+
+    partial void OnRepairInProgressChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CanRepairDestroyedElements));
     }
 }

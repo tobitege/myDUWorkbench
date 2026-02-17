@@ -132,6 +132,42 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnRepairDestroyedElementsClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanRepairDestroyedElements)
+        {
+            vm.StatusMessage = "Repair is unavailable. Load a DB snapshot first.";
+            return;
+        }
+
+        var dialog = new ConfirmationDialog(
+            "Repair element flags",
+            "Delete destroyed and restoreCount properties for all elements in the loaded construct?",
+            "Repair",
+            "Cancel");
+        bool confirmed = await dialog.ShowDialog<bool>(this);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            await vm.RepairDestroyedElementsAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            vm.RepairStatusText = "Repair failed.";
+            vm.StatusMessage = $"Repair failed: {ex.Message}";
+        }
+    }
+
     private async void OnSaveLuaAsClick(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel vm ||
@@ -727,7 +763,6 @@ public partial class MainWindow : Window
     private void RebuildLuaEditorSectionTree()
     {
         ResetLuaEditorSectionTreeNodes();
-        var root = new LuaEditorSectionTreeRow("Sections");
         var groupedRows = new Dictionary<string, LuaEditorSectionTreeRow>(StringComparer.Ordinal);
         foreach (string component in LuaCoreComponentOrder)
         {
@@ -751,12 +786,11 @@ public partial class MainWindow : Window
             _luaEditorSectionNodeBySection[section] = sectionNode;
         }
 
-        foreach (string key in OrderLuaComponentKeys(groupedRows.Keys))
-        {
-            root.Children.Add(groupedRows[key]);
-        }
-
-        _luaEditorSectionModel.SetRoot(root);
+        IReadOnlyList<string> orderedKeys = OrderLuaComponentKeys(groupedRows.Keys);
+        IReadOnlyList<LuaEditorSectionTreeRow> roots = orderedKeys
+            .Select(key => groupedRows[key])
+            .ToArray();
+        _luaEditorSectionModel.SetRoots(roots);
         _luaEditorSectionModel.ExpandAll();
     }
 
@@ -892,6 +926,7 @@ public partial class MainWindow : Window
         public LuaEditorSectionState? Section { get; }
         public string ComponentLabel { get; }
         public ObservableCollection<LuaEditorSectionTreeRow> Children { get; } = new();
+        public FontWeight DisplayFontWeight => Section is null ? FontWeight.Bold : FontWeight.Normal;
         public string DisplayLabel => Section is null
             ? ComponentLabel
             : $"{Section.Index:000} {_eventLabel}{(Section.IsDirty ? " *" : string.Empty)}";

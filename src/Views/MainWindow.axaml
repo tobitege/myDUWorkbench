@@ -20,25 +20,21 @@
     </Design.DataContext>
 
     <Grid Margin="16"
-          RowDefinitions="Auto,*"
+          RowDefinitions="Auto,*,Auto"
           RowSpacing="10">
         <StackPanel Grid.Row="0"
                     Spacing="4">
             <TextBlock FontSize="22"
                        FontWeight="Bold"
-                       Text="myDU Construct Data Workbench" />
-            <TextBlock Foreground="DarkOrange"
-                       Text="{Binding StatusMessage}" />
-            <TextBlock Foreground="DarkSeaGreen"
-                       Text="{Binding DatabaseAvailabilityDisplay, StringFormat=DB: {0}}" />
+                       Text="myDUWorker by @tobitege" />
         </StackPanel>
 
         <Border x:Name="MainWorkbenchRoot"
                 Grid.Row="1"
-                Padding="10"
+                Padding="0"
                 BorderThickness="1"
-                CornerRadius="6">
-            <TabControl>
+                CornerRadius="0">
+            <TabControl Padding="0">
                 <TabItem Header="Constructs">
                     <Grid RowDefinitions="Auto,Auto,*"
                           RowSpacing="10">
@@ -139,9 +135,9 @@
                                     Command="{Binding LoadDatabaseCommand}" />
                         </WrapPanel>
 
-                        <TabControl Grid.Row="2">
+                        <TabControl Grid.Row="2" Padding="0">
                             <TabItem Header="Element Properties">
-                                <Border Padding="10"
+                                <Border Padding="0"
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Margin="0,6,0,0">
@@ -160,7 +156,7 @@
                                             <TextBlock Text="Filter"
                                                        VerticalAlignment="Center"
                                                        Margin="10,0,0,0" />
-                                            <ComboBox Width="260"
+                                            <ComboBox Width="240"
                                                       IsEditable="True"
                                                       Text="{Binding ElementTypeNameFilterInput}"
                                                       ItemsSource="{Binding ElementTypeFilterHistory}"
@@ -174,6 +170,10 @@
                                             <Button Content="Filter"
                                                     Width="75"
                                                     Command="{Binding ApplyElementTypeNameFilterCommand}" />
+                                            <CheckBox Content="Damaged"
+                                                      VerticalAlignment="Center"
+                                                      Margin="6,0,0,0"
+                                                      IsChecked="{Binding DamagedOnly}" />
                                             <Button Content="Clear"
                                                     Width="70"
                                                     Command="{Binding ClearElementTypeFilterHistoryCommand}" />
@@ -182,6 +182,10 @@
                                                     Margin="10,0,6,0"
                                                     Background="#505050"
                                                     VerticalAlignment="Center" />
+                                            <Button Content="Repair"
+                                                    Width="90"
+                                                    IsEnabled="{Binding CanRepairDestroyedElements}"
+                                                    Click="OnRepairDestroyedElementsClick" />
                                             <Button Content="Export getConstructData JSON"
                                                     Width="220"
                                                     Click="OnExportGetConstructDataClick" />
@@ -209,6 +213,17 @@
                                                         </DataTemplate>
                                                     </DataGridHierarchicalColumn.CellTemplate>
                                                 </DataGridHierarchicalColumn>
+                                                <DataGridTemplateColumn Header="Name"
+                                                                        SortMemberPath="Item.ElementName"
+                                                                        Width="1.3*"
+                                                                        MinWidth="130"
+                                                                        x:CompileBindings="False">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate x:DataType="hier:HierarchicalNode">
+                                                            <TextBlock Text="{Binding Item.ElementName}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
                                                 <DataGridTemplateColumn Header="ElementId"
                                                                         SortMemberPath="Item.ElementId"
                                                                         Width="120"
@@ -675,7 +690,7 @@
                             </Border>
                         </WrapPanel>
 
-                        <TabControl Grid.Row="1">
+                        <TabControl Grid.Row="1" Padding="0">
                             <TabItem Header="Database Summary">
                                 <Border Padding="10"
                                         BorderThickness="1"
@@ -755,7 +770,7 @@
                             BorderBrush="#505050"
                             CornerRadius="4"
                             Padding="8">
-                        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
+                        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
                               RowSpacing="8">
                             <CheckBox Grid.Row="0"
                                       Content="Auto-load on startup"
@@ -795,7 +810,24 @@
                                       Content="Auto-load player names"
                                       IsChecked="{Binding AutoLoadPlayerNames}" />
 
-                            <DataGrid Grid.Row="7"
+                            <StackPanel Grid.Row="7"
+                                        Orientation="Horizontal"
+                                        Spacing="8"
+                                        VerticalAlignment="Center">
+                                <TextBlock VerticalAlignment="Center"
+                                           Text="Element properties listed by default:" />
+                                <TextBlock VerticalAlignment="Center"
+                                           Margin="8,0,0,0"
+                                           Text="Check:" />
+                                <Button Content="All"
+                                        MinWidth="56"
+                                        Command="{Binding CheckAllElementPropertyFiltersCommand}" />
+                                <Button Content="None"
+                                        MinWidth="56"
+                                        Command="{Binding UncheckAllElementPropertyFiltersCommand}" />
+                            </StackPanel>
+
+                            <DataGrid Grid.Row="8"
                                       x:Name="ConfigPropertiesGrid"
                                       AutoGenerateColumns="False"
                                       CanUserSortColumns="True"
@@ -808,10 +840,17 @@
                                                         Binding="{Binding PropertyName}"
                                                         Width="*"
                                                         MinWidth="180" />
-                                    <DataGridCheckBoxColumn Header="Active"
-                                                            Binding="{Binding IsActive, Mode=TwoWay}"
+                                    <DataGridTemplateColumn Header="Active"
                                                             Width="120"
-                                                            MinWidth="90" />
+                                                            MinWidth="90"
+                                                            x:CompileBindings="False">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox HorizontalAlignment="Center"
+                                                          IsChecked="{Binding IsActive, Mode=TwoWay}" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </Grid>
@@ -909,7 +948,8 @@
                                                                 x:CompileBindings="False">
                                         <DataGridHierarchicalColumn.CellTemplate>
                                             <DataTemplate x:DataType="hier:HierarchicalNode">
-                                                <TextBlock Text="{Binding Item.DisplayLabel}" />
+                                                <TextBlock Text="{Binding Item.DisplayLabel}"
+                                                           FontWeight="{Binding Item.DisplayFontWeight}" />
                                             </DataTemplate>
                                         </DataGridHierarchicalColumn.CellTemplate>
                                     </DataGridHierarchicalColumn>
@@ -1011,6 +1051,48 @@
                         </Border>
                     </Grid>
                 </Border>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2"
+                BorderThickness="1"
+                CornerRadius="0"
+                Padding="8,4">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto"
+                  ColumnSpacing="8">
+                <TextBlock Grid.Column="0"
+                           VerticalAlignment="Center"
+                           Foreground="DarkSeaGreen"
+                           Text="{Binding DatabaseAvailabilityDisplay, StringFormat=DB: {0}}" />
+
+                <Border Grid.Column="1"
+                        Width="1"
+                        Background="#505050" />
+
+                <TextBlock Grid.Column="2"
+                           VerticalAlignment="Center"
+                           Foreground="DarkOrange"
+                           Text="{Binding StatusMessage}"
+                           TextTrimming="CharacterEllipsis" />
+
+                <Border Grid.Column="3"
+                        IsVisible="{Binding RepairInProgress}"
+                        Width="1"
+                        Background="#505050" />
+
+                <StackPanel Grid.Column="4"
+                            IsVisible="{Binding RepairInProgress}"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            VerticalAlignment="Center">
+                    <TextBlock VerticalAlignment="Center"
+                               Text="{Binding RepairStatusText}" />
+                    <ProgressBar Width="170"
+                                 Height="14"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding RepairProgressPercent}" />
+                </StackPanel>
             </Grid>
         </Border>
 
