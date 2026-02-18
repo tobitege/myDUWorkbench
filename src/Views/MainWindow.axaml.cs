@@ -44,6 +44,7 @@ public partial class MainWindow : Window
     private const string LuaGrammarResourceSuffix = "Grammars.lua.tmLanguage.json";
     private const string LuaGrammarCacheFileName = "lua.tmLanguage.json";
     private const int LuaFoldRefreshDebounceMs = 250;
+    private const int LuaEditorInfoStatusClearDelaySeconds = 10;
     private static readonly string[] LuaCoreComponentOrder = new[] {"library", "system", "player", "construct", "unit"};
     private static readonly bool LuaHoverTooltipsEnabled = false;
     private static readonly Regex LuaSectionHeaderRegex = new(
@@ -78,6 +79,8 @@ public partial class MainWindow : Window
     private string _luaEditorLastPersistedContent = string.Empty;
     private bool _allowCloseAfterDiscardConfirmation;
     private string _luaEditorEncodingLabel = "UTF-8";
+    private CancellationTokenSource? _luaInfoStatusClearCts;
+    private string _luaInfoStatusMessage = string.Empty;
     private readonly DataGrid[] _hierarchicalTreeGrids;
 
     public MainWindow()
