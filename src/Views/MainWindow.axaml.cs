@@ -168,6 +168,158 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnDeleteBlueprintClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanDeleteBlueprint || vm.SelectedBlueprint is not { } bp)
+        {
+            vm.BlueprintsStatus = "No blueprint selected or database offline.";
+            return;
+        }
+
+        var dialog = new ConfirmationDialog(
+            "Delete Blueprint",
+            $"Delete blueprint '{bp.Name}' (ID {bp.Id}, {bp.ElementCount} element(s))?",
+            "Delete",
+            "Cancel");
+        bool confirmed = await dialog.ShowDialog<bool>(this);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await vm.DeleteBlueprintAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            vm.BlueprintsStatus = $"Delete failed: {ex.Message}";
+        }
+    }
+
+    private async void OnCopyBlueprintClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanCopyBlueprint || vm.SelectedBlueprint is not { } bp)
+        {
+            vm.BlueprintsStatus = "No blueprint selected or database offline.";
+            return;
+        }
+
+        string initialName = string.IsNullOrWhiteSpace(bp.Name) ? "BlueprintCopy" : $"{bp.Name} Copy";
+        var dialog = new TextInputDialog(
+            "Copy Blueprint",
+            "New name",
+            initialName,
+            "Copy",
+            "Cancel",
+            vm.ValidateBlueprintNameInput);
+        string? newName = await dialog.ShowDialog<string?>(this);
+        if (string.IsNullOrWhiteSpace(newName))
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await vm.CopyBlueprintAsync(newName, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            vm.BlueprintsStatus = $"Copy failed: {ex.Message}";
+        }
+    }
+
+    private async void OnExportBlueprintJsonClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanEditBlueprint || vm.SelectedBlueprint is null)
+        {
+            vm.BlueprintsStatus = "No blueprint selected or database offline.";
+            return;
+        }
+
+        var optionsDialog = new BlueprintExportOptionsDialog();
+        bool confirmed = await optionsDialog.ShowDialog<bool>(this);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            string json = await vm.ExportSelectedBlueprintJsonAsync(
+                optionsDialog.ExcludeVoxels,
+                optionsDialog.ExcludeElementsLinks,
+                cts.Token);
+
+            vm.BlueprintsStatus = "Blueprint JSON export ready.";
+            var dialog = new ExportJsonDialog(json)
+            {
+                Title = "Blueprint Export JSON"
+            };
+            await dialog.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            vm.BlueprintsStatus = $"Export failed: {ex.Message}";
+        }
+    }
+
+    private void OnClearConstructSelectionClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        vm.SelectedConstructNameSuggestion = null;
+        vm.ConstructIdInput = string.Empty;
+    }
+
+    private void OnClearPlayerSelectionClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        vm.SelectedPlayerNameSuggestion = null;
+        vm.PlayerIdInput = string.Empty;
+        vm.PersistSettingsNow();
+    }
+
     private async void OnImportBlueprintClick(object? sender, RoutedEventArgs e)
     {
         _ = sender;
@@ -178,73 +330,41 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (vm.SelectedPlayerNameSuggestion?.PlayerId is not ulong selectedPlayerId || selectedPlayerId == 0UL)
+        {
+            const string message = "Select a player first (Player ID > 0) before importing a blueprint.";
+            vm.StatusMessage = message;
+            vm.BlueprintsStatus = message;
+            return;
+        }
+
         try
         {
-            var options = new FilePickerOpenOptions
-            {
-                Title = "Import Blueprint JSON",
-                AllowMultiple = false,
-                FileTypeFilter = new[]
-                {
-                    new FilePickerFileType("JSON files")
-                    {
-                        Patterns = new[] {"*.json"}
-                    },
-                    new FilePickerFileType("All files")
-                    {
-                        Patterns = new[] {"*.*"}
-                    }
-                }
-            };
-
-            if (!string.IsNullOrWhiteSpace(vm.LastSavedFolder))
-            {
-                Uri? folderUri = TryBuildFolderUri(vm.LastSavedFolder);
-                if (folderUri is not null)
-                {
-                    IStorageFolder? folder = await StorageProvider.TryGetFolderFromPathAsync(folderUri);
-                    if (folder is not null)
-                    {
-                        options.SuggestedStartLocation = folder;
-                    }
-                }
-            }
-
-            IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(options);
-            if (files.Count == 0)
-            {
-                return;
-            }
-
-            IStorageFile selected = files[0];
-            string sourcePath = ResolveStorageFilePath(selected);
-
-            var confirm = new ConfirmationDialog(
-                "Import Blueprint",
-                "Import blueprint file?",
-                "Import",
-                "Cancel",
-                hintText: "Blueprint import can take some time, especially for large files. Please wait until the status bar confirms completion.",
-                detailsText: sourcePath,
-                option1Label: "Dry run mode",
-                option1Checked: vm.BlueprintImportDryRunMode,
-                option2Label: "Import into app",
-                option2Checked: vm.BlueprintImportIntoApp,
-                option3Label: "Import into game database",
-                option3Checked: vm.BlueprintImportIntoGameDatabase,
-                option4Label: "Append date if BP exists",
-                option4Checked: vm.BlueprintImportAppendDateIfExists);
-            bool confirmed = await confirm.ShowDialog<bool>(this);
+            var importDialog = new BlueprintImportDialog(
+                vm.BlueprintImportDryRunMode,
+                vm.BlueprintImportIntoApp,
+                vm.BlueprintImportIntoGameDatabase,
+                vm.BlueprintImportAppendDateIfExists,
+                vm.LastSavedFolder);
+            bool confirmed = await importDialog.ShowDialog<bool>(this);
             if (!confirmed)
             {
                 vm.StatusMessage = "Blueprint import cancelled.";
                 return;
             }
 
-            vm.BlueprintImportDryRunMode = confirm.IsOption1Checked;
-            vm.BlueprintImportIntoApp = confirm.IsOption2Checked;
-            vm.BlueprintImportIntoGameDatabase = confirm.IsOption3Checked;
-            vm.BlueprintImportAppendDateIfExists = confirm.IsOption4Checked;
+            vm.BlueprintImportDryRunMode = importDialog.DryRunMode;
+            vm.BlueprintImportIntoApp = importDialog.ImportIntoApp;
+            vm.BlueprintImportIntoGameDatabase = importDialog.ImportIntoGameDatabase;
+            vm.BlueprintImportAppendDateIfExists = importDialog.AppendDateIfExists;
+
+            IStorageFile? selectedFile = importDialog.SelectedFile;
+            string sourcePath = importDialog.SelectedSourcePath;
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                vm.StatusMessage = "Blueprint import cancelled.";
+                return;
+            }
 
             UpdateLastUsedFolder(vm, sourcePath);
 
@@ -259,9 +379,9 @@ public partial class MainWindow : Window
                     vm.BlueprintImportAppendDateIfExists,
                     cts.Token);
             }
-            else
+            else if (selectedFile is not null)
             {
-                await using Stream readStream = await selected.OpenReadAsync();
+                await using Stream readStream = await selectedFile.OpenReadAsync();
                 using var reader = new StreamReader(readStream, Encoding.UTF8, true);
                 string json = await reader.ReadToEndAsync();
                 await vm.ImportBlueprintJsonAsync(
@@ -272,6 +392,10 @@ public partial class MainWindow : Window
                     vm.BlueprintImportIntoGameDatabase,
                     vm.BlueprintImportAppendDateIfExists,
                     cts.Token);
+            }
+            else
+            {
+                throw new InvalidOperationException("Selected blueprint file is unavailable.");
             }
         }
         catch (OperationCanceledException)

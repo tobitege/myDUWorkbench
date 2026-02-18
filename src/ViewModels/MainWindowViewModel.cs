@@ -32,6 +32,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private const int AutoConnectRetryMinSeconds = 10;
     private const int AutoConnectRetryMaxSeconds = 9999;
     private const int AutoConnectRetryDefaultSeconds = 30;
+    private const int BlueprintNameMaxLength = 30;
 
     public sealed record BlobSaveRequest(string SuggestedFileName, string Content, string DefaultExtension);
     public sealed record LuaEditorSourceContext(
@@ -70,6 +71,8 @@ public partial class MainWindowViewModel : ViewModelBase
     private Dictionary<string, bool> _elementPropertyActiveStates = new(StringComparer.OrdinalIgnoreCase);
     private bool _isBulkUpdatingElementPropertyFilters;
     private WindowPlacementSettings _windowPlacement = new();
+    private bool _isUpdatingBlueprintTypeSelection;
+    private ulong? _lastBlueprintCreatorFilterPlayerId;
 
     public ObservableCollection<ElementPropertyRecord> ElementProperties { get; } = new();
     public ObservableCollection<ElementPropertyRecord> Dpuyaml6Properties { get; } = new();
@@ -83,6 +86,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public HierarchicalModel<PropertyTreeRow> Dpuyaml6Model { get; }
     public HierarchicalModel<PropertyTreeRow> Content2Model { get; }
     public HierarchicalModel<PropertyTreeRow> DatabankModel { get; }
+    public ObservableCollection<BlueprintDbRecord> Blueprints { get; } = new();
 
     [ObservableProperty]
     private string constructIdInput = "1000061";
@@ -149,6 +153,30 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool blueprintImportAppendDateIfExists;
+
+    [ObservableProperty]
+    private string blueprintNameFilter = string.Empty;
+
+    [ObservableProperty]
+    private BlueprintDbRecord? selectedBlueprint;
+
+    [ObservableProperty]
+    private string blueprintsStatus = string.Empty;
+
+    [ObservableProperty]
+    private string blueprintEditName = string.Empty;
+
+    [ObservableProperty]
+    private bool blueprintEditFreeDeploy;
+
+    [ObservableProperty]
+    private bool blueprintEditApplyMaxUse;
+
+    [ObservableProperty]
+    private bool blueprintEditCoreBlueprint = true;
+
+    [ObservableProperty]
+    private bool blueprintEditSingleUseBlueprint;
 
     [ObservableProperty]
     private string elementTypeNameFilterInput = string.Empty;
@@ -257,6 +285,16 @@ public partial class MainWindowViewModel : ViewModelBase
     public bool CanSaveSelectedHtmlRsBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedContent2Node));
     public bool CanSaveSelectedDatabankBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedDatabankNode));
     public bool CanRepairDestroyedElements => !IsBusy && !RepairInProgress && _lastSnapshot is not null && IsDatabaseOnline();
+    public bool CanEditBlueprint => SelectedBlueprint is not null && !IsBusy && IsDatabaseOnline();
+    public bool CanEditBlueprintMaxUse => CanEditBlueprint && BlueprintEditApplyMaxUse;
+    public bool CanCopyBlueprint => CanEditBlueprint;
+    public bool CanDeleteBlueprint => CanEditBlueprint;
+    public bool CanImportBlueprint => !IsBusy && SelectedPlayerNameSuggestion?.PlayerId is ulong playerId && playerId > 0UL;
+    public bool CanSaveBlueprint => CanEditBlueprint && IsBlueprintEditInputValid(out _, out _);
+    public string BlueprintEditValidationMessage => BuildBlueprintEditValidationMessage();
+    public bool HasBlueprintEditValidationError => !string.IsNullOrWhiteSpace(BlueprintEditValidationMessage);
+    public string BlueprintCurrentMaxUseStateDisplay => BuildBlueprintCurrentMaxUseStateDisplay();
+    public string BlueprintsPlayerFilterDisplay => BuildBlueprintsPlayerFilterDisplay();
     public string DatabaseAvailabilityDisplay => BuildDatabaseAvailabilityDisplay();
     public string SelectedPlayerIdDisplay => SelectedPlayerNameSuggestion?.PlayerId?.ToString(CultureInfo.InvariantCulture) ?? "-";
 
@@ -324,6 +362,320 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             StatusMessage = "Database is offline.";
         }
+    }
+
+    [RelayCommand]
+    private async Task LoadBlueprintsAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        try
+        {
+            IsBusy = true;
+            BlueprintsStatus = "Loading blueprints...";
+            DataConnectionOptions options = BuildDbOptions();
+            IReadOnlyList<BlueprintDbRecord> records = await _dataService.GetBlueprintsAsync(
+                options,
+                BlueprintNameFilter,
+                GetBlueprintCreatorFilterPlayerId(),
+                cts.Token);
+
+            Blueprints.Clear();
+            foreach (BlueprintDbRecord record in records)
+            {
+                Blueprints.Add(record);
+            }
+
+            BlueprintsStatus = $"{records.Count} blueprint(s) loaded.";
+        }
+        catch (Exception ex)
+        {
+            BlueprintsStatus = $"Load failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    public async Task DeleteBlueprintAsync(CancellationToken cancellationToken)
+    {
+        if (SelectedBlueprint is not { } bp)
+        {
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            BlueprintsStatus = $"Deleting blueprint {bp.Id}...";
+            DataConnectionOptions options = BuildDbOptions();
+            BlueprintDeleteResult result = await _dataService.DeleteBlueprintAsync(
+                options,
+                bp.Id,
+                EndpointTemplateInput,
+                BlueprintImportEndpointInput,
+                cancellationToken);
+
+            if (result.BlueprintRowsDeleted <= 0)
+            {
+                BlueprintsStatus = $"Blueprint {bp.Id} not found (already deleted?).";
+                return;
+            }
+
+            Blueprints.Remove(bp);
+            SelectedBlueprint = null;
+
+            string voxelSuffix = string.Empty;
+            if (result.VoxelCleanupAttempted)
+            {
+                voxelSuffix = result.VoxelCleanupSucceeded
+                    ? " Voxel cleanup: ok."
+                    : $" Voxel cleanup warning: {result.VoxelCleanupNote}";
+            }
+
+            BlueprintsStatus =
+                $"Blueprint {bp.Id} deleted (rows: blueprint={result.BlueprintRowsDeleted}, element={result.ElementRowsDeleted}, element_property={result.ElementPropertyRowsDeleted}).{voxelSuffix}";
+        }
+        catch (Exception ex)
+        {
+            BlueprintsStatus = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+            OnPropertyChanged(nameof(CanDeleteBlueprint));
+            OnPropertyChanged(nameof(CanSaveBlueprint));
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveBlueprintAsync()
+    {
+        if (SelectedBlueprint is not { } bp)
+        {
+            return;
+        }
+
+        if (!TryNormalizeBlueprintName(BlueprintEditName, out string normalizedName, out string nameError))
+        {
+            BlueprintsStatus = nameError;
+            return;
+        }
+
+        long? maxUse = bp.MaxUse;
+        if (BlueprintEditApplyMaxUse)
+        {
+            maxUse = BlueprintEditCoreBlueprint ? null : 1L;
+        }
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        try
+        {
+            IsBusy = true;
+            BlueprintsStatus = $"Saving blueprint {bp.Id}...";
+            DataConnectionOptions options = BuildDbOptions();
+            BlueprintUpdateResult result = await _dataService.UpdateBlueprintFieldsAsync(
+                options,
+                bp.Id,
+                normalizedName,
+                BlueprintEditFreeDeploy,
+                bp.HasMaterials,
+                BlueprintEditApplyMaxUse,
+                maxUse,
+                cts.Token);
+
+            if (result.RowsUpdated <= 0)
+            {
+                BlueprintsStatus = $"Blueprint {bp.Id} not found or unchanged by DB operation.";
+                return;
+            }
+
+            int idx = Blueprints.IndexOf(bp);
+            BlueprintDbRecord updated = bp with
+            {
+                Name = normalizedName,
+                FreeDeploy = BlueprintEditFreeDeploy,
+                MaxUse = BlueprintEditApplyMaxUse ? maxUse : bp.MaxUse
+            };
+            if (idx >= 0)
+            {
+                Blueprints[idx] = updated;
+            }
+            SelectedBlueprint = updated;
+            BlueprintsStatus = $"Blueprint {bp.Id} saved (rows updated: {result.RowsUpdated}).";
+        }
+        catch (Exception ex)
+        {
+            BlueprintsStatus = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+            OnPropertyChanged(nameof(CanDeleteBlueprint));
+            OnPropertyChanged(nameof(CanSaveBlueprint));
+        }
+    }
+
+    public async Task CopyBlueprintAsync(string requestedName, CancellationToken cancellationToken)
+    {
+        if (SelectedBlueprint is not { } source)
+        {
+            return;
+        }
+
+        if (!TryNormalizeBlueprintName(requestedName, out string normalizedName, out string nameError))
+        {
+            BlueprintsStatus = nameError;
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            BlueprintsStatus = $"Copying blueprint {source.Id}...";
+            DataConnectionOptions options = BuildDbOptions();
+            BlueprintCopyResult copyResult = await _dataService.CopyBlueprintAsync(
+                options,
+                source.Id,
+                normalizedName,
+                cancellationToken);
+
+            if (copyResult.BlueprintRowsInserted <= 0 || !copyResult.CopiedBlueprintId.HasValue)
+            {
+                BlueprintsStatus = $"Copy failed: source blueprint {source.Id} not found.";
+                return;
+            }
+
+            IReadOnlyList<BlueprintDbRecord> refreshed = await _dataService.GetBlueprintsAsync(
+                options,
+                BlueprintNameFilter,
+                GetBlueprintCreatorFilterPlayerId(),
+                cancellationToken);
+
+            Blueprints.Clear();
+            BlueprintDbRecord? inserted = null;
+            foreach (BlueprintDbRecord record in refreshed)
+            {
+                Blueprints.Add(record);
+                if (record.Id == copyResult.CopiedBlueprintId.Value)
+                {
+                    inserted = record;
+                }
+            }
+
+            SelectedBlueprint = inserted;
+            string copySuffix = string.IsNullOrWhiteSpace(copyResult.CopyNote)
+                ? string.Empty
+                : $" ({copyResult.CopyNote})";
+            BlueprintsStatus =
+                $"Blueprint copied: {source.Id} -> {copyResult.CopiedBlueprintId.Value} (element={copyResult.ElementRowsCopied}, element_property={copyResult.ElementPropertyRowsCopied}).{copySuffix}";
+        }
+        catch (Exception ex)
+        {
+            BlueprintsStatus = $"Copy failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+            OnPropertyChanged(nameof(CanEditBlueprint));
+            OnPropertyChanged(nameof(CanCopyBlueprint));
+            OnPropertyChanged(nameof(CanDeleteBlueprint));
+            OnPropertyChanged(nameof(CanSaveBlueprint));
+        }
+    }
+
+    public string? ValidateBlueprintNameInput(string? candidate)
+    {
+        return TryNormalizeBlueprintName(candidate, out _, out string error)
+            ? null
+            : error;
+    }
+
+    public async Task<string> ExportSelectedBlueprintJsonAsync(
+        bool excludeVoxels,
+        bool excludeElementsAndLinks,
+        CancellationToken cancellationToken)
+    {
+        if (SelectedBlueprint is not { } bp)
+        {
+            throw new InvalidOperationException("No blueprint selected.");
+        }
+
+        DataConnectionOptions options = BuildDbOptions();
+        return await _dataService.ExportBlueprintJsonAsync(
+            options,
+            bp.Id,
+            EndpointTemplateInput,
+            BlueprintImportEndpointInput,
+            excludeVoxels,
+            excludeElementsAndLinks,
+            cancellationToken);
+    }
+
+    private static bool TryNormalizeBlueprintName(string? input, out string normalizedName, out string error)
+    {
+        normalizedName = string.Empty;
+        error = string.Empty;
+
+        if (string.IsNullOrEmpty(input))
+        {
+            error = "Name is required.";
+            return false;
+        }
+
+        string trimmed = input.Trim();
+        if (!string.Equals(input, trimmed, StringComparison.Ordinal))
+        {
+            error = "Name must not start or end with blanks.";
+            return false;
+        }
+
+        if (trimmed.Length > BlueprintNameMaxLength)
+        {
+            error = $"Name must be at most {BlueprintNameMaxLength} characters.";
+            return false;
+        }
+
+        normalizedName = trimmed;
+        return true;
+    }
+
+    private bool IsBlueprintEditInputValid(out string normalizedName, out string error)
+    {
+        if (!TryNormalizeBlueprintName(BlueprintEditName, out normalizedName, out error))
+        {
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private string BuildBlueprintEditValidationMessage()
+    {
+        if (SelectedBlueprint is null)
+        {
+            return string.Empty;
+        }
+
+        if (!CanEditBlueprint)
+        {
+            return string.Equals(DatabaseAvailabilityStatus, "Ok", StringComparison.OrdinalIgnoreCase)
+                ? "Editing is unavailable while another task is running."
+                : "Database is offline.";
+        }
+
+        if (!TryNormalizeBlueprintName(BlueprintEditName, out _, out string nameError))
+        {
+            return nameError;
+        }
+
+        return string.Empty;
     }
 
     [RelayCommand]
@@ -4039,6 +4391,13 @@ public partial class MainWindowViewModel : ViewModelBase
 
         RefreshAutoConnectLoopState();
         OnPropertyChanged(nameof(DatabaseAvailabilityDisplay));
+        OnPropertyChanged(nameof(CanEditBlueprint));
+        OnPropertyChanged(nameof(CanEditBlueprintMaxUse));
+        OnPropertyChanged(nameof(CanCopyBlueprint));
+        OnPropertyChanged(nameof(CanDeleteBlueprint));
+        OnPropertyChanged(nameof(CanSaveBlueprint));
+        OnPropertyChanged(nameof(BlueprintEditValidationMessage));
+        OnPropertyChanged(nameof(HasBlueprintEditValidationError));
         OnPropertyChanged(nameof(CanRepairDestroyedElements));
     }
 
@@ -4132,11 +4491,14 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         OnPropertyChanged(nameof(SelectedPlayerIdDisplay));
+        OnPropertyChanged(nameof(CanImportBlueprint));
 
         if (!_isRestoringSettings && !_isStartupInitializing)
         {
             RefreshConstructSuggestionsForCurrentPlayer();
         }
+
+        HandleBlueprintPlayerFilterChange();
     }
 
     partial void OnSelectedContent2NodeChanged(object? value)
@@ -4157,11 +4519,155 @@ public partial class MainWindowViewModel : ViewModelBase
 
     partial void OnIsBusyChanged(bool value)
     {
+        OnPropertyChanged(nameof(CanEditBlueprint));
+        OnPropertyChanged(nameof(CanEditBlueprintMaxUse));
+        OnPropertyChanged(nameof(CanCopyBlueprint));
+        OnPropertyChanged(nameof(CanImportBlueprint));
         OnPropertyChanged(nameof(CanRepairDestroyedElements));
+        OnPropertyChanged(nameof(CanDeleteBlueprint));
+        OnPropertyChanged(nameof(CanSaveBlueprint));
+        OnPropertyChanged(nameof(BlueprintEditValidationMessage));
+        OnPropertyChanged(nameof(HasBlueprintEditValidationError));
     }
 
     partial void OnRepairInProgressChanged(bool value)
     {
         OnPropertyChanged(nameof(CanRepairDestroyedElements));
+    }
+
+    partial void OnSelectedBlueprintChanged(BlueprintDbRecord? value)
+    {
+        if (value is not null)
+        {
+            BlueprintEditName = value.Name;
+            BlueprintEditFreeDeploy = value.FreeDeploy;
+            BlueprintEditApplyMaxUse = false;
+            SetBlueprintTypeSelectionFromMaxUse(value.MaxUse);
+        }
+        else
+        {
+            BlueprintEditName = string.Empty;
+            BlueprintEditFreeDeploy = false;
+            BlueprintEditApplyMaxUse = false;
+            SetBlueprintTypeSelection(isCore: true);
+        }
+
+        OnPropertyChanged(nameof(CanEditBlueprint));
+        OnPropertyChanged(nameof(CanEditBlueprintMaxUse));
+        OnPropertyChanged(nameof(CanCopyBlueprint));
+        OnPropertyChanged(nameof(CanDeleteBlueprint));
+        OnPropertyChanged(nameof(CanSaveBlueprint));
+        OnPropertyChanged(nameof(BlueprintEditValidationMessage));
+        OnPropertyChanged(nameof(HasBlueprintEditValidationError));
+        OnPropertyChanged(nameof(BlueprintCurrentMaxUseStateDisplay));
+    }
+
+    partial void OnBlueprintEditNameChanged(string value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(CanSaveBlueprint));
+        OnPropertyChanged(nameof(BlueprintEditValidationMessage));
+        OnPropertyChanged(nameof(HasBlueprintEditValidationError));
+    }
+
+    partial void OnBlueprintEditCoreBlueprintChanged(bool value)
+    {
+        if (_isUpdatingBlueprintTypeSelection)
+        {
+            return;
+        }
+
+        SetBlueprintTypeSelection(isCore: value);
+    }
+
+    partial void OnBlueprintEditSingleUseBlueprintChanged(bool value)
+    {
+        if (_isUpdatingBlueprintTypeSelection)
+        {
+            return;
+        }
+
+        SetBlueprintTypeSelection(isCore: !value);
+    }
+
+    partial void OnBlueprintEditApplyMaxUseChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(CanEditBlueprintMaxUse));
+        OnPropertyChanged(nameof(CanSaveBlueprint));
+        OnPropertyChanged(nameof(BlueprintEditValidationMessage));
+        OnPropertyChanged(nameof(HasBlueprintEditValidationError));
+    }
+
+    private void SetBlueprintTypeSelectionFromMaxUse(long? maxUse)
+    {
+        bool isSingleUse = maxUse.HasValue && maxUse.Value == 1L;
+        SetBlueprintTypeSelection(isCore: !isSingleUse);
+    }
+
+    private void SetBlueprintTypeSelection(bool isCore)
+    {
+        _isUpdatingBlueprintTypeSelection = true;
+        try
+        {
+            BlueprintEditCoreBlueprint = isCore;
+            BlueprintEditSingleUseBlueprint = !isCore;
+        }
+        finally
+        {
+            _isUpdatingBlueprintTypeSelection = false;
+        }
+
+        OnPropertyChanged(nameof(CanSaveBlueprint));
+        OnPropertyChanged(nameof(BlueprintEditValidationMessage));
+        OnPropertyChanged(nameof(HasBlueprintEditValidationError));
+    }
+
+    private string BuildBlueprintCurrentMaxUseStateDisplay()
+    {
+        if (SelectedBlueprint is not { } bp)
+        {
+            return string.Empty;
+        }
+
+        return bp.MaxUse switch
+        {
+            null => "Current DB type: Core BP (unlimited)",
+            1 => "Current DB type: Single-use BP",
+            0 => "Current DB type: Expired BP (max_use = 0)",
+            long value => $"Current DB type: Custom max_use = {value.ToString(CultureInfo.InvariantCulture)}"
+        };
+    }
+
+    private ulong? GetBlueprintCreatorFilterPlayerId()
+    {
+        return SelectedPlayerNameSuggestion?.PlayerId;
+    }
+
+    private string BuildBlueprintsPlayerFilterDisplay()
+    {
+        ulong? playerId = GetBlueprintCreatorFilterPlayerId();
+        return playerId.HasValue
+            ? $"Player filter: ON (creator_id = {playerId.Value.ToString(CultureInfo.InvariantCulture)})"
+            : "Player filter: OFF";
+    }
+
+    private void HandleBlueprintPlayerFilterChange()
+    {
+        ulong? currentPlayerId = GetBlueprintCreatorFilterPlayerId();
+        if (_lastBlueprintCreatorFilterPlayerId == currentPlayerId)
+        {
+            return;
+        }
+
+        _lastBlueprintCreatorFilterPlayerId = currentPlayerId;
+        OnPropertyChanged(nameof(BlueprintsPlayerFilterDisplay));
+
+        if (_isRestoringSettings || _isStartupInitializing || IsBusy || !IsDatabaseOnline())
+        {
+            return;
+        }
+
+        _ = LoadBlueprintsAsync();
     }
 }

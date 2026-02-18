@@ -192,3 +192,45 @@ public sealed record UserConstructRecord(
     public string DisplayLabel =>
         $"{ConstructId} | {ConstructName} | core={CoreKind} | ownerP={OwnerPlayerId?.ToString() ?? "-"} | ownerO={OwnerOrganizationId?.ToString() ?? "-"}";
 }
+
+public sealed record BlueprintDbRecord(
+    ulong Id,
+    string Name,
+    ulong? CreatorId,
+    DateTime? CreatedAt,
+    bool FreeDeploy,
+    long? MaxUse,
+    bool HasMaterials,
+    int ElementCount)
+{
+    public string CreatedAtDisplay => CreatedAt?.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+    public string MaxUseDisplay => MaxUse switch
+    {
+        null => "Core",
+        1 => "Single-use",
+        0 => "Expired (0)",
+        long value => value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+    };
+    public string CreatorIdDisplay => CreatorId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-";
+}
+
+public sealed record BlueprintDeleteResult(
+    ulong BlueprintId,
+    int BlueprintRowsDeleted,
+    int ElementRowsDeleted,
+    int ElementPropertyRowsDeleted,
+    bool VoxelCleanupAttempted,
+    bool VoxelCleanupSucceeded,
+    string VoxelCleanupNote);
+
+public sealed record BlueprintUpdateResult(
+    ulong BlueprintId,
+    int RowsUpdated);
+
+public sealed record BlueprintCopyResult(
+    ulong SourceBlueprintId,
+    ulong? CopiedBlueprintId,
+    int BlueprintRowsInserted,
+    int ElementRowsCopied,
+    int ElementPropertyRowsCopied,
+    string CopyNote);

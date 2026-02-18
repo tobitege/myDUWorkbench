@@ -1,0 +1,38 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="myDUWorker.Views.BlueprintExportOptionsDialog"
+        Width="460"
+        MinWidth="420"
+        Height="230"
+        MinHeight="210"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="Blueprint JSON Export Options">
+    <Grid Margin="14"
+          RowDefinitions="Auto,Auto,*,Auto"
+          RowSpacing="10">
+        <TextBlock Grid.Row="0"
+                   FontWeight="SemiBold"
+                   Text="Export options" />
+
+        <StackPanel Grid.Row="1"
+                    Spacing="8">
+            <CheckBox x:Name="ExcludeVoxelsCheckBox"
+                      Content="Exclude voxels"
+                      IsChecked="False" />
+            <CheckBox x:Name="ExcludeElementsLinksCheckBox"
+                      Content="Exclude elements/links"
+                      IsChecked="False" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="3"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <Button Content="Cancel"
+                    Click="OnCancelClick" />
+            <Button Content="Export"
+                    Click="OnExportClick" />
+        </StackPanel>
+    </Grid>
+</Window>

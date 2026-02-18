@@ -39,19 +39,19 @@
                     <Grid RowDefinitions="Auto,Auto,*"
                           RowSpacing="10">
                         <WrapPanel Orientation="Horizontal"
-                                   ItemWidth="390">
+                                   ItemWidth="420">
                             <Border BorderThickness="1"
                                     BorderBrush="#505050"
                                     CornerRadius="4"
                                     Padding="8">
                                 <StackPanel Spacing="4">
                                     <TextBlock Text="Construct Name Filter (wildcard * supported)" />
-                                    <Grid ColumnDefinitions="180,*"
+                                    <Grid ColumnDefinitions="150,*"
                                           ColumnSpacing="8">
                                         <TextBox Grid.Column="0"
                                                  Text="{Binding ConstructNameSearchInput}"
-                                                 Width="180"
-                                                 MaxWidth="180"
+                                                 Width="150"
+                                                 MaxWidth="150"
                                                  HorizontalAlignment="Left"
                                                  Watermark="Big or Big*">
                                             <TextBox.KeyBindings>
@@ -63,21 +63,35 @@
                                                    VerticalAlignment="Center"
                                                    Text="{Binding ConstructSearchStatus}" />
                                     </Grid>
-                                    <ComboBox ItemsSource="{Binding ConstructNameSuggestions}"
-                                              SelectedItem="{Binding SelectedConstructNameSuggestion}"
-                                              Width="360"
-                                              MaxWidth="360"
-                                              HorizontalAlignment="Left">
-                                        <ComboBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <TextBlock Text="{Binding DisplayLabel}" />
-                                            </DataTemplate>
-                                        </ComboBox.ItemTemplate>
-                                        <ComboBox.KeyBindings>
-                                            <KeyBinding Gesture="Enter"
-                                                        Command="{Binding UseConstructSuggestionAndLoadCommand}" />
-                                        </ComboBox.KeyBindings>
-                                    </ComboBox>
+                                    <Grid ColumnDefinitions="360,Auto"
+                                          ColumnSpacing="6">
+                                        <ComboBox Grid.Column="0"
+                                                  ItemsSource="{Binding ConstructNameSuggestions}"
+                                                  SelectedItem="{Binding SelectedConstructNameSuggestion}"
+                                                  Width="360"
+                                                  MaxWidth="360"
+                                                  HorizontalAlignment="Left">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding DisplayLabel}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                            <ComboBox.KeyBindings>
+                                                <KeyBinding Gesture="Enter"
+                                                            Command="{Binding UseConstructSuggestionAndLoadCommand}" />
+                                            </ComboBox.KeyBindings>
+                                        </ComboBox>
+                                        <Button Grid.Column="1"
+                                                Width="28"
+                                                Height="28"
+                                                Padding="0"
+                                                Click="OnClearConstructSelectionClick"
+                                                ToolTip.Tip="Clear selected construct">
+                                            <PathIcon Width="14"
+                                                      Height="14"
+                                                      Data="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.41 4.29 19.71 2.88 18.29 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z" />
+                                        </Button>
+                                    </Grid>
                                     <CheckBox Content="Limit to selected player constructs"
                                               IsChecked="{Binding LimitToSelectedPlayerConstructs}" />
                                 </StackPanel>
@@ -93,10 +107,10 @@
                                           ColumnSpacing="8">
                                         <TextBox Grid.Column="0"
                                                  Text="{Binding PlayerNameSearchInput}"
-                                                 Width="180"
-                                                 MaxWidth="180"
+                                                 Width="150"
+                                                 MaxWidth="150"
                                                  HorizontalAlignment="Left"
-                                                 Watermark="tob or tob*" />
+                                                 Watermark="tobi or tobi*" />
                                         <Button Grid.Column="1"
                                                 Width="28"
                                                 Height="28"
@@ -111,17 +125,31 @@
                                                    VerticalAlignment="Center"
                                                    Text="{Binding PlayerSearchStatus}" />
                                     </Grid>
-                                    <ComboBox ItemsSource="{Binding PlayerNameSuggestions}"
-                                              SelectedItem="{Binding SelectedPlayerNameSuggestion}"
-                                              Width="360"
-                                              MaxWidth="360"
-                                              HorizontalAlignment="Left">
-                                        <ComboBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <TextBlock Text="{Binding DisplayLabel}" />
-                                            </DataTemplate>
-                                        </ComboBox.ItemTemplate>
-                                    </ComboBox>
+                                    <Grid ColumnDefinitions="360,Auto"
+                                          ColumnSpacing="6">
+                                        <ComboBox Grid.Column="0"
+                                                  ItemsSource="{Binding PlayerNameSuggestions}"
+                                                  SelectedItem="{Binding SelectedPlayerNameSuggestion}"
+                                                  Width="360"
+                                                  MaxWidth="360"
+                                                  HorizontalAlignment="Left">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding DisplayLabel}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                        <Button Grid.Column="1"
+                                                Width="28"
+                                                Height="28"
+                                                Padding="0"
+                                                Click="OnClearPlayerSelectionClick"
+                                                ToolTip.Tip="Clear selected player">
+                                            <PathIcon Width="14"
+                                                      Height="14"
+                                                      Data="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.41 4.29 19.71 2.88 18.29 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z" />
+                                        </Button>
+                                    </Grid>
                                     <TextBlock Text="{Binding SelectedPlayerIdDisplay, StringFormat=Player ID: {0}}" />
                                 </StackPanel>
                             </Border>
@@ -133,8 +161,6 @@
                                    HorizontalAlignment="Left">
                             <Button Content="Load DB Snapshot"
                                     Command="{Binding LoadDatabaseCommand}" />
-                            <Button Content="Import Blueprint"
-                                    Click="OnImportBlueprintClick" />
                         </WrapPanel>
 
                         <TabControl Grid.Row="2" Padding="0">
@@ -294,6 +320,203 @@
                                                 </DataGridTemplateColumn>
                                             </DataGrid.Columns>
                                         </DataGrid>
+                                    </Grid>
+                                </Border>
+                            </TabItem>
+
+                            <TabItem Header="Blueprints">
+                                <Border Padding="0"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Margin="0,6,0,0">
+                                    <Grid RowSpacing="8">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                            <RowDefinition Height="6" />
+                                            <RowDefinition Height="230"
+                                                           MinHeight="190"
+                                                           MaxHeight="230" />
+                                        </Grid.RowDefinitions>
+                                        <Grid Grid.Row="0"
+                                              RowDefinitions="Auto,Auto"
+                                              RowSpacing="6">
+                                            <StackPanel Grid.Row="0"
+                                                        Orientation="Horizontal"
+                                                        Spacing="6"
+                                                        HorizontalAlignment="Left">
+                                                <TextBlock Text="Name filter"
+                                                           VerticalAlignment="Center"
+                                                           Margin="6,0,0,0" />
+                                                <TextBox Width="200"
+                                                         Text="{Binding BlueprintNameFilter}"
+                                                         Watermark="MyBlueprint or My*">
+                                                    <TextBox.KeyBindings>
+                                                        <KeyBinding Gesture="Enter"
+                                                                    Command="{Binding LoadBlueprintsCommand}" />
+                                                    </TextBox.KeyBindings>
+                                                </TextBox>
+                                                <Button Content="Load / Refresh"
+                                                        Width="120"
+                                                        Command="{Binding LoadBlueprintsCommand}" />
+                                            </StackPanel>
+
+                                            <StackPanel Grid.Row="1"
+                                                        Orientation="Horizontal"
+                                                        Spacing="6"
+                                                        HorizontalAlignment="Left">
+                                                <Button Content="Copy"
+                                                        Width="70"
+                                                        IsEnabled="{Binding CanCopyBlueprint}"
+                                                        Click="OnCopyBlueprintClick" />
+                                                <Button Content="Delete"
+                                                        Width="70"
+                                                        IsEnabled="{Binding CanDeleteBlueprint}"
+                                                        Click="OnDeleteBlueprintClick" />
+                                                <Button Content="Import Blueprint"
+                                                        Width="130"
+                                                        IsEnabled="{Binding CanImportBlueprint}"
+                                                        Click="OnImportBlueprintClick" />
+                                                <Button Content="Export JSON"
+                                                        Width="120"
+                                                        IsEnabled="{Binding CanEditBlueprint}"
+                                                        Click="OnExportBlueprintJsonClick" />
+                                                <TextBlock VerticalAlignment="Center"
+                                                           Foreground="#A0A0A0"
+                                                           Text="{Binding BlueprintsPlayerFilterDisplay}" />
+                                                <TextBlock VerticalAlignment="Center"
+                                                           Foreground="DarkOrange"
+                                                           Text="{Binding BlueprintsStatus}" />
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <DataGrid Grid.Row="1"
+                                                  x:Name="BlueprintsGrid"
+                                                  AutoGenerateColumns="False"
+                                                  ItemsSource="{Binding Blueprints}"
+                                                  SelectedItem="{Binding SelectedBlueprint}"
+                                                  CanUserSortColumns="True"
+                                                  CanUserResizeColumns="True"
+                                                  GridLinesVisibility="Horizontal"
+                                                  UseLogicalScrollable="True">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="ID"
+                                                                    Binding="{Binding Id}"
+                                                                    Width="SizeToHeader"
+                                                                    MinWidth="60" />
+                                                <DataGridTextColumn Header="Name"
+                                                                    Binding="{Binding Name}"
+                                                                    Width="3*"
+                                                                    MinWidth="160" />
+                                                <DataGridTextColumn Header="Creator ID"
+                                                                    Binding="{Binding CreatorIdDisplay}"
+                                                                    Width="SizeToHeader"
+                                                                    MinWidth="70" />
+                                                <DataGridTextColumn Header="Created"
+                                                                    Binding="{Binding CreatedAtDisplay}"
+                                                                    Width="SizeToHeader"
+                                                                    MinWidth="120" />
+                                                <DataGridTemplateColumn Header="Free Deploy"
+                                                                        SortMemberPath="FreeDeploy"
+                                                                        Width="SizeToHeader"
+                                                                        MinWidth="70">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <CheckBox IsChecked="{Binding FreeDeploy}"
+                                                                      IsHitTestVisible="False"
+                                                                      HorizontalAlignment="Center" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                                <DataGridTextColumn Header="Max Use"
+                                                                    Binding="{Binding MaxUseDisplay}"
+                                                                    Width="SizeToHeader"
+                                                                    MinWidth="60" />
+                                                <DataGridTextColumn Header="Elements"
+                                                                    Binding="{Binding ElementCount}"
+                                                                    Width="SizeToHeader"
+                                                                    MinWidth="60" />
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+
+                                        <GridSplitter Grid.Row="2"
+                                                      Height="6"
+                                                      HorizontalAlignment="Stretch"
+                                                      ResizeDirection="Rows"
+                                                      Background="#505050" />
+
+                                        <Border Grid.Row="3"
+                                                BorderThickness="1"
+                                                BorderBrush="#505050"
+                                                CornerRadius="4"
+                                                Padding="10"
+                                                Margin="0,0,0,6">
+                                            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                                                  RowSpacing="8">
+                                                <TextBlock Grid.Row="0"
+                                                           FontWeight="SemiBold"
+                                                           Text="Edit selected blueprint" />
+
+                                                <Grid Grid.Row="1"
+                                                      ColumnDefinitions="100,*"
+                                                      ColumnSpacing="8">
+                                                    <TextBlock Grid.Column="0"
+                                                               VerticalAlignment="Center"
+                                                               Text="Name" />
+                                                    <TextBox Grid.Column="1"
+                                                             Text="{Binding BlueprintEditName}"
+                                                             MaxLength="30"
+                                                             IsEnabled="{Binding CanEditBlueprint}" />
+                                                </Grid>
+
+                                                <Grid Grid.Row="2"
+                                                      ColumnDefinitions="100,Auto,70,Auto,*"
+                                                      ColumnSpacing="12">
+                                                    <TextBlock Grid.Column="0"
+                                                               VerticalAlignment="Center"
+                                                               Text="Free Deploy" />
+                                                    <CheckBox Grid.Column="1"
+                                                              IsChecked="{Binding BlueprintEditFreeDeploy}"
+                                                              IsEnabled="{Binding CanEditBlueprint}" />
+                                                    <TextBlock Grid.Column="2"
+                                                               VerticalAlignment="Center"
+                                                               Text="Change usage:" />
+                                                    <CheckBox Grid.Column="3"
+                                                              VerticalAlignment="Center"
+                                                              IsChecked="{Binding BlueprintEditApplyMaxUse}"
+                                                              IsEnabled="{Binding CanEditBlueprint}" />
+                                                    <StackPanel Grid.Column="4"
+                                                                Orientation="Horizontal"
+                                                                Spacing="12">
+                                                        <RadioButton Content="Core BP (unlimited)"
+                                                                     GroupName="BlueprintMaxUseType"
+                                                                     IsChecked="{Binding BlueprintEditCoreBlueprint}"
+                                                                     IsEnabled="{Binding CanEditBlueprintMaxUse}" />
+                                                        <RadioButton Content="Single-use BP"
+                                                                     GroupName="BlueprintMaxUseType"
+                                                                     IsChecked="{Binding BlueprintEditSingleUseBlueprint}"
+                                                                     IsEnabled="{Binding CanEditBlueprintMaxUse}" />
+                                                    </StackPanel>
+                                                </Grid>
+
+                                                <TextBlock Grid.Row="3"
+                                                           Foreground="#A0A0A0"
+                                                           Text="{Binding BlueprintCurrentMaxUseStateDisplay}"
+                                                           IsVisible="{Binding CanEditBlueprint}" />
+
+                                                <TextBlock Grid.Row="4"
+                                                           Foreground="IndianRed"
+                                                           Text="{Binding BlueprintEditValidationMessage}"
+                                                           IsVisible="{Binding HasBlueprintEditValidationError}" />
+
+                                                <Button Grid.Row="5"
+                                                        Content="Save changes"
+                                                        Width="120"
+                                                        HorizontalAlignment="Left"
+                                                        IsEnabled="{Binding CanSaveBlueprint}"
+                                                        Command="{Binding SaveBlueprintCommand}" />
+                                            </Grid>
+                                        </Border>
                                     </Grid>
                                 </Border>
                             </TabItem>
