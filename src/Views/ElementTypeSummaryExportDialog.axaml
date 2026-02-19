@@ -1,6 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        x:Class="myDUWorker.Views.ElementTypeSummaryExportDialog"
+        x:Class="myDUWorkbench.Views.ElementTypeSummaryExportDialog"
         Width="470"
         MinWidth="430"
         SizeToContent="Height"

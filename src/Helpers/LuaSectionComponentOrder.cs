@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-namespace myDUWorker.Helpers;
+namespace myDUWorkbench.Helpers;
 
 internal static class LuaSectionComponentOrder
 {

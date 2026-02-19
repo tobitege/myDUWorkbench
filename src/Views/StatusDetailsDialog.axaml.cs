@@ -4,7 +4,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using System;
 
-namespace myDUWorker.Views;
+namespace myDUWorkbench.Views;
 
 public partial class StatusDetailsDialog : Window
 {

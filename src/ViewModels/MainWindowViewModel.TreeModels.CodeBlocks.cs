@@ -2,9 +2,9 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Media;
-using myDUWorker.Helpers;
-using myDUWorker.Models;
-using myDUWorker.Services;
+using myDUWorkbench.Helpers;
+using myDUWorkbench.Models;
+using myDUWorkbench.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -18,7 +18,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.ViewModels;
+namespace myDUWorkbench.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
@@ -56,6 +56,42 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         PropertyTreeRow root = BuildCodeBlockTreeRoot(records, partBuilder, rootLabel);
         model.SetRoot(root);
+    }
+
+    private void RefreshCodeBlockNodeIndexes(
+        PropertyTreeRow luaRoot,
+        PropertyTreeRow htmlRsRoot,
+        PropertyTreeRow databankRoot)
+    {
+        PopulateBlockNodeIndex(_luaBlockNodeByElementId, luaRoot);
+        PopulateBlockNodeIndex(_htmlRsBlockNodeByElementId, htmlRsRoot);
+        PopulateBlockNodeIndex(_databankBlockNodeByElementId, databankRoot);
+    }
+
+    private static void PopulateBlockNodeIndex(
+        IDictionary<ulong, PropertyTreeRow> target,
+        PropertyTreeRow root)
+    {
+        target.Clear();
+        if (root.Children.Count == 0)
+        {
+            return;
+        }
+
+        foreach (PropertyTreeRow child in root.Children)
+        {
+            if (child.ElementId is not ulong elementId ||
+                elementId == 0UL ||
+                !string.Equals(child.NodeKind, "Block", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!target.ContainsKey(elementId))
+            {
+                target[elementId] = child;
+            }
+        }
     }
 
     private static async Task ReplaceCollectionAsync(

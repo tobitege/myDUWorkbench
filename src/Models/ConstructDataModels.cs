@@ -7,7 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 
-namespace myDUWorker.Models;
+namespace myDUWorkbench.Models;
 
 public sealed record DataConnectionOptions(
     string ServerRootPath,

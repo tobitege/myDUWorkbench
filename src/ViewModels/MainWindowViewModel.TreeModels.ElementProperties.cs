@@ -2,8 +2,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Media;
-using myDUWorker.Models;
-using myDUWorker.Services;
+using myDUWorkbench.Models;
+using myDUWorkbench.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -17,7 +17,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.ViewModels;
+namespace myDUWorkbench.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
@@ -35,6 +35,7 @@ public partial class MainWindowViewModel : ViewModelBase
             cancellationToken: default,
             progress: null);
         ElementPropertiesModel.SetRoots(typeRoots);
+        UpdateConstructBrowserEntryCounts(typeRoots);
     }
 
     private static List<PropertyTreeRow> BuildElementPropertyTreeRoots(
@@ -600,6 +601,7 @@ public partial class MainWindowViewModel : ViewModelBase
         Dpuyaml6Model.SetRoot(luaRoot);
         Content2Model.SetRoot(htmlRoot);
         DatabankModel.SetRoot(databankRoot);
+        RefreshCodeBlockNodeIndexes(luaRoot, htmlRoot, databankRoot);
         progressUpdate?.Invoke(92d, "Import: finalizing view");
 
         if (AutoCollapseToFirstLevel)

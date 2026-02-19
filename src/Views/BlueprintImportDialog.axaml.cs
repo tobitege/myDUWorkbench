@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace myDUWorker.Views;
+namespace myDUWorkbench.Views;
 
 public partial class BlueprintImportDialog : Window
 {

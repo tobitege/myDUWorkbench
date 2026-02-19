@@ -9,15 +9,14 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace myDUWorker.Services;
+namespace myDUWorkbench.Services;
 
 public sealed record ContentBlobDecodeResult(
     string DecodedText,
     int DbValueBytes,
     int PayloadBytes,
     int DecodedBytes,
-    bool UsedLz4,
-    string? SourceBlobPath);
+    bool UsedLz4);
 
 public static class ContentBlobDecoder
 {
@@ -35,11 +34,9 @@ public static class ContentBlobDecoder
         }
 
         byte[] payload = dbValue;
-        string? sourceBlobPath = null;
-        if (TryResolveHashBlob(dbValue, serverRootPath, out byte[] resolvedPayload, out string? resolvedPath))
+        if (TryResolveHashBlob(dbValue, serverRootPath, out byte[] resolvedPayload))
         {
             payload = resolvedPayload;
-            sourceBlobPath = resolvedPath;
         }
 
         byte[] decoded = payload;
@@ -61,16 +58,14 @@ public static class ContentBlobDecoder
             dbValue.Length,
             payload.Length,
             decoded.Length,
-            usedLz4,
-            sourceBlobPath);
+            usedLz4);
 
         return true;
     }
 
-    private static bool TryResolveHashBlob(byte[] value, string serverRootPath, out byte[] payload, out string? blobPath)
+    private static bool TryResolveHashBlob(byte[] value, string serverRootPath, out byte[] payload)
     {
         payload = value;
-        blobPath = null;
 
         string text;
         try
@@ -94,7 +89,6 @@ public static class ContentBlobDecoder
         }
 
         payload = File.ReadAllBytes(path);
-        blobPath = path;
         return true;
     }
 

@@ -1,4 +1,4 @@
-using myDUWorker.Models;
+using myDUWorkbench.Models;
 using Newtonsoft.Json;
 using Npgsql;
 using System;
@@ -17,7 +17,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.Services;
+namespace myDUWorkbench.Services;
 
 public sealed partial class MyDuDataService
 {

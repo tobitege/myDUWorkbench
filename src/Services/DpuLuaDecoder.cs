@@ -12,15 +12,14 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace myDUWorker.Services;
+namespace myDUWorkbench.Services;
 
 public sealed record DpuLuaDecodeResult(
     string DecodedText,
     int DbValueBytes,
     int PayloadBytes,
     int DecodedBytes,
-    int SectionCount,
-    string? SourceBlobPath);
+    int SectionCount);
 
 public static class DpuLuaDecoder
 {
@@ -38,11 +37,9 @@ public static class DpuLuaDecoder
         }
 
         byte[] payload = dbValue;
-        string? sourceBlobPath = null;
-        if (TryResolveHashBlob(dbValue, serverRootPath, out byte[] resolvedPayload, out string? resolvedPath))
+        if (TryResolveHashBlob(dbValue, serverRootPath, out byte[] resolvedPayload))
         {
             payload = resolvedPayload;
-            sourceBlobPath = resolvedPath;
         }
 
         try
@@ -70,8 +67,7 @@ public static class DpuLuaDecoder
                 dbValue.Length,
                 payload.Length,
                 decodedBytes.Length,
-                sections.Count,
-                sourceBlobPath);
+                sections.Count);
 
             return true;
         }
@@ -125,10 +121,9 @@ public static class DpuLuaDecoder
         }
     }
 
-    private static bool TryResolveHashBlob(byte[] value, string serverRootPath, out byte[] payload, out string? blobPath)
+    private static bool TryResolveHashBlob(byte[] value, string serverRootPath, out byte[] payload)
     {
         payload = value;
-        blobPath = null;
 
         string text;
         try
@@ -152,7 +147,6 @@ public static class DpuLuaDecoder
         }
 
         payload = File.ReadAllBytes(path);
-        blobPath = path;
         return true;
     }
 

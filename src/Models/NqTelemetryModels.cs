@@ -1,7 +1,7 @@
 using System;
 using System.Globalization;
 
-namespace myDUWorker.Models;
+namespace myDUWorkbench.Models;
 
 public readonly record struct Vec3(double X, double Y, double Z)
 {

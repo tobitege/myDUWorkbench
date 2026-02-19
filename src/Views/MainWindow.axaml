@@ -1,6 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:vm="using:myDUWorker.ViewModels"
+        xmlns:vm="using:myDUWorkbench.ViewModels"
         xmlns:hier="clr-namespace:Avalonia.Controls.DataGridHierarchical;assembly=Avalonia.Controls.DataGrid"
         xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -8,7 +8,7 @@
         mc:Ignorable="d"
         d:DesignWidth="1280"
         d:DesignHeight="900"
-        x:Class="myDUWorker.Views.MainWindow"
+        x:Class="myDUWorkbench.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Icon="/Assets/avalonia-logo.ico"
         Title="myDU Construct Workbench"
@@ -26,7 +26,7 @@
                     Spacing="4">
             <TextBlock FontSize="22"
                        FontWeight="Bold"
-                       Text="myDUWorker by @tobitege" />
+                       Text="myDUWorkbench by @tobitege" />
         </StackPanel>
 
         <Border x:Name="MainWorkbenchRoot"
@@ -36,7 +36,7 @@
                 CornerRadius="0">
             <TabControl Padding="0">
                 <TabItem Header="Constructs">
-                    <Grid RowDefinitions="Auto,Auto,*"
+                    <Grid RowDefinitions="Auto,*"
                           RowSpacing="10">
                         <WrapPanel Orientation="Horizontal"
                                    ItemWidth="420">
@@ -155,16 +155,9 @@
                             </Border>
                         </WrapPanel>
 
-                        <WrapPanel Grid.Row="1"
-                                   Orientation="Horizontal"
-                                   ItemWidth="200"
-                                   HorizontalAlignment="Left">
-                            <Button Content="Load DB Snapshot"
-                                    Command="{Binding LoadDatabaseCommand}" />
-                        </WrapPanel>
-
-                        <TabControl Grid.Row="2"
+                        <TabControl Grid.Row="1"
                                     x:Name="ConstructDataTabControl"
+                                    SelectedIndex="{Binding ConstructDataTabIndex, Mode=TwoWay}"
                                     Padding="0">
                             <TabItem Header="Construct Browser">
                                 <Border Padding="0"
@@ -217,9 +210,6 @@
                                                     Width="90"
                                                     IsEnabled="{Binding CanRepairDestroyedElements}"
                                                     Click="OnRepairDestroyedElementsClick" />
-                                            <Button Content="Export getConstructData JSON"
-                                                    Width="220"
-                                                    Click="OnExportGetConstructDataClick" />
                                             <Button Content="Export Elements JSON"
                                                     Width="180"
                                                     IsEnabled="{Binding CanExportConstructBrowserElementSummary}"
@@ -545,10 +535,10 @@
                                         Margin="0,6,0,0">
                                     <Grid RowDefinitions="Auto,3*,Auto,4*"
                                           RowSpacing="8">
-                                        <WrapPanel Grid.Row="0"
-                                                   Orientation="Horizontal"
-                                                   ItemWidth="140"
-                                                   HorizontalAlignment="Left">
+                                        <StackPanel Grid.Row="0"
+                                                    Orientation="Horizontal"
+                                                    Spacing="10"
+                                                    HorizontalAlignment="Left">
                                             <Button Content="Expand all"
                                                     Click="OnExpandAllLuaBlocksClick" />
                                             <Button Content="Collapse all"
@@ -562,7 +552,7 @@
                                             <CheckBox Content="Auto-wrap"
                                                       IsChecked="{Binding AutoWrapContent}"
                                                       Width="120" />
-                                        </WrapPanel>
+                                        </StackPanel>
 
                                         <DataGrid x:Name="LuaBlocksGrid"
                                                   Grid.Row="1"
@@ -636,10 +626,10 @@
                                         Margin="0,6,0,0">
                                     <Grid RowDefinitions="Auto,3*,Auto,4*"
                                           RowSpacing="8">
-                                        <WrapPanel Grid.Row="0"
-                                                   Orientation="Horizontal"
-                                                   ItemWidth="140"
-                                                   HorizontalAlignment="Left">
+                                        <StackPanel Grid.Row="0"
+                                                    Orientation="Horizontal"
+                                                    Spacing="10"
+                                                    HorizontalAlignment="Left">
                                             <Button Content="Expand all"
                                                     Click="OnExpandAllHtmlRsClick" />
                                             <Button Content="Collapse all"
@@ -650,7 +640,7 @@
                                             <CheckBox Content="Auto-wrap"
                                                       IsChecked="{Binding AutoWrapContent}"
                                                       Width="120" />
-                                        </WrapPanel>
+                                        </StackPanel>
 
                                         <DataGrid x:Name="HtmlRsGrid"
                                                   Grid.Row="1"
@@ -724,10 +714,10 @@
                                         Margin="0,6,0,0">
                                     <Grid RowDefinitions="Auto,3*,Auto,4*"
                                           RowSpacing="8">
-                                        <WrapPanel Grid.Row="0"
-                                                   Orientation="Horizontal"
-                                                   ItemWidth="140"
-                                                   HorizontalAlignment="Left">
+                                        <StackPanel Grid.Row="0"
+                                                    Orientation="Horizontal"
+                                                    Spacing="10"
+                                                    HorizontalAlignment="Left">
                                             <Button Content="Expand all"
                                                     Click="OnExpandAllDatabankClick" />
                                             <Button Content="Collapse all"
@@ -738,7 +728,7 @@
                                             <CheckBox Content="Auto-wrap"
                                                       IsChecked="{Binding AutoWrapContent}"
                                                       Width="120" />
-                                        </WrapPanel>
+                                        </StackPanel>
 
                                         <DataGrid x:Name="DatabankGrid"
                                                   Grid.Row="1"
@@ -1316,7 +1306,7 @@
                 BorderThickness="1"
                 CornerRadius="0"
                 Padding="8,4">
-            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto"
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                   ColumnSpacing="8">
                 <TextBlock Grid.Column="0"
                            VerticalAlignment="Center"
@@ -1336,11 +1326,22 @@
                            TextTrimming="CharacterEllipsis" />
 
                 <Border Grid.Column="3"
+                        IsVisible="{Binding HasGridEntryCountStatus}"
+                        Width="1"
+                        Background="#505050" />
+
+                <TextBlock Grid.Column="4"
+                           IsVisible="{Binding HasGridEntryCountStatus}"
+                           VerticalAlignment="Center"
+                           Foreground="DarkSeaGreen"
+                           Text="{Binding GridEntryCountStatus}" />
+
+                <Border Grid.Column="5"
                         IsVisible="{Binding RepairInProgress}"
                         Width="1"
                         Background="#505050" />
 
-                <StackPanel Grid.Column="4"
+                <StackPanel Grid.Column="6"
                             IsVisible="{Binding RepairInProgress}"
                             Orientation="Horizontal"
                             Spacing="8"
@@ -1354,12 +1355,12 @@
                                  Value="{Binding RepairProgressPercent}" />
                 </StackPanel>
 
-                <Border Grid.Column="5"
+                <Border Grid.Column="7"
                         IsVisible="{Binding BlueprintImportInProgress}"
                         Width="1"
                         Background="#505050" />
 
-                <StackPanel Grid.Column="6"
+                <StackPanel Grid.Column="8"
                             IsVisible="{Binding BlueprintImportInProgress}"
                             Orientation="Horizontal"
                             Spacing="8"
@@ -1373,12 +1374,12 @@
                                  Value="{Binding BlueprintImportProgressPercent}" />
                 </StackPanel>
 
-                <Border Grid.Column="7"
+                <Border Grid.Column="9"
                         IsVisible="{Binding ExportInProgress}"
                         Width="1"
                         Background="#505050" />
 
-                <StackPanel Grid.Column="8"
+                <StackPanel Grid.Column="10"
                             IsVisible="{Binding ExportInProgress}"
                             Orientation="Horizontal"
                             Spacing="8"

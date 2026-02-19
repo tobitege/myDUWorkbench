@@ -14,7 +14,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace myDUWorker.Views;
+namespace myDUWorkbench.Views;
 
 public partial class ExportJsonDialog : Window
 {

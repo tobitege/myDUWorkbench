@@ -2,8 +2,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Media;
-using myDUWorker.Models;
-using myDUWorker.Services;
+using myDUWorkbench.Models;
+using myDUWorkbench.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -17,7 +17,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.ViewModels;
+namespace myDUWorkbench.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
@@ -519,6 +519,37 @@ public partial class MainWindowViewModel : ViewModelBase
         return TryBuildSelectedBlobSaveRequest(SelectedDatabankNode, ".json", IsMainBlobNode, out request);
     }
 
+    public bool TrySelectElementCodeBlockTab(ulong elementId)
+    {
+        if (elementId == 0UL)
+        {
+            return false;
+        }
+
+        if (_luaBlockNodeByElementId.TryGetValue(elementId, out PropertyTreeRow? luaBlock))
+        {
+            ConstructDataTabIndex = 2;
+            SelectedDpuyaml6Node = ResolveTreeSelectionTarget(Dpuyaml6Model, luaBlock);
+            return true;
+        }
+
+        if (_htmlRsBlockNodeByElementId.TryGetValue(elementId, out PropertyTreeRow? htmlRsBlock))
+        {
+            ConstructDataTabIndex = 3;
+            SelectedContent2Node = ResolveTreeSelectionTarget(Content2Model, htmlRsBlock);
+            return true;
+        }
+
+        if (_databankBlockNodeByElementId.TryGetValue(elementId, out PropertyTreeRow? databankBlock))
+        {
+            ConstructDataTabIndex = 4;
+            SelectedDatabankNode = ResolveTreeSelectionTarget(DatabankModel, databankBlock);
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool TryBuildSelectedBlobSaveRequest(
         object? selectedNode,
         string extension,
@@ -593,6 +624,13 @@ public partial class MainWindowViewModel : ViewModelBase
         sanitized = Regex.Replace(sanitized, "\\s+", "_");
         sanitized = sanitized.Trim('_');
         return string.IsNullOrWhiteSpace(sanitized) ? "blob" : sanitized;
+    }
+
+    private static object ResolveTreeSelectionTarget(
+        HierarchicalModel<PropertyTreeRow> model,
+        PropertyTreeRow row)
+    {
+        return model.FindNode(row) ?? (object)row;
     }
 
     private static object? FindNodeBySelectionKey(HierarchicalModel<PropertyTreeRow> model, string selectionKey)

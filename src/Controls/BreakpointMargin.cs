@@ -7,7 +7,7 @@ using Avalonia.Media;
 using AvaloniaEdit.Editing;
 using AvaloniaEdit.Rendering;
 
-namespace myDUWorker.Controls;
+namespace myDUWorkbench.Controls;
 
 public sealed class BreakpointMargin : AbstractMargin
 {

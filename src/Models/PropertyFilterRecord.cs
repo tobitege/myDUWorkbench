@@ -2,7 +2,7 @@
 // - PropertyFilterRecord: Binds a property name to an observable active/inactive filter flag.
 using CommunityToolkit.Mvvm.ComponentModel;
 
-namespace myDUWorker.Models;
+namespace myDUWorkbench.Models;
 
 public partial class PropertyFilterRecord : ObservableObject
 {

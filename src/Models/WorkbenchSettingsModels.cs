@@ -2,7 +2,7 @@
 // - WorkbenchSettings: Runtime settings model consumed directly by the view model.
 // - PersistedWorkbenchSettings: Disk-serialization model including encrypted password field.
 // - WindowPlacementSettings: Captures size/position/screen/maximized window state.
-namespace myDUWorker.Models;
+namespace myDUWorkbench.Models;
 
 using System.Collections.Generic;
 

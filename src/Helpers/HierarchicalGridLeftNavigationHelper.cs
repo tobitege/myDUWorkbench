@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Input;
 
-namespace myDUWorker.Helpers;
+namespace myDUWorkbench.Helpers;
 
 public static class HierarchicalGridLeftNavigationHelper
 {

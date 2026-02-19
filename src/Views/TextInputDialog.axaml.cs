@@ -2,7 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using System;
 
-namespace myDUWorker.Views;
+namespace myDUWorkbench.Views;
 
 public partial class TextInputDialog : Window
 {

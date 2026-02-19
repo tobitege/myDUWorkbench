@@ -12,11 +12,11 @@ using AvaloniaEdit.Document;
 using AvaloniaEdit.Folding;
 using AvaloniaEdit.Rendering;
 using AvaloniaEdit.TextMate;
-using myDUWorker.Controls;
-using myDUWorker.Helpers;
-using myDUWorker.Models;
-using myDUWorker.Services;
-using myDUWorker.ViewModels;
+using myDUWorkbench.Controls;
+using myDUWorkbench.Helpers;
+using myDUWorkbench.Models;
+using myDUWorkbench.Services;
+using myDUWorkbench.ViewModels;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -32,7 +32,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TextMateSharp.Grammars;
 
-namespace myDUWorker.Views;
+namespace myDUWorkbench.Views;
 
 public partial class MainWindow : Window
 {

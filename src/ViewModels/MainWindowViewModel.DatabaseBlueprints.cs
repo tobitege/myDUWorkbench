@@ -2,8 +2,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Media;
-using myDUWorker.Models;
-using myDUWorker.Services;
+using myDUWorkbench.Models;
+using myDUWorkbench.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -17,7 +17,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.ViewModels;
+namespace myDUWorkbench.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {

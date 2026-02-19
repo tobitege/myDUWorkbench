@@ -1,7 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 
-namespace myDUWorker.Views;
+namespace myDUWorkbench.Views;
 
 public partial class ConfirmationDialog : Window
 {

@@ -3,7 +3,7 @@
 // - SaveAsync: Serializes and writes settings with save-gate synchronization.
 // - BuildPersistedSettings: Maps runtime settings into persisted DTO form.
 // - EncryptPassword / DecryptPassword: Protects DB credentials with Windows DPAPI user scope.
-using myDUWorker.Models;
+using myDUWorkbench.Models;
 using System;
 using System.IO;
 using System.Security.Cryptography;
@@ -12,7 +12,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.Services;
+namespace myDUWorkbench.Services;
 
 public sealed class WorkbenchSettingsService
 {
@@ -25,7 +25,7 @@ public sealed class WorkbenchSettingsService
         _settingsFilePath = settingsFilePath ??
             Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "myDUWorker",
+                "myDUWorkbench",
                 "workbench-settings.json");
     }
 

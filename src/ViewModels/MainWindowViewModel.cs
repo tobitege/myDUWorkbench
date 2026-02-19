@@ -2,15 +2,14 @@
 // - LoadDatabaseAsync: Loads DB construct snapshot, categorizes properties, and refreshes tree models.
 // - ImportBlueprintJsonAsync: Imports blueprint JSON and projects it into grid/property models.
 // - ProbeEndpointAsync: Probes endpoint payloads and updates decoded transport summaries.
-// - BuildGetConstructDataExportJson: Produces export JSON merging endpoint data with DB fallback values.
 // - QueueConstructNameSearch: Debounces construct-name search and schedules async suggestion refresh.
 // - TryGetSelectedLuaBlobSaveRequest: Builds save metadata for currently selected LUA blob node.
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Media;
-using myDUWorker.Models;
-using myDUWorker.Services;
+using myDUWorkbench.Models;
+using myDUWorkbench.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -24,7 +23,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.ViewModels;
+namespace myDUWorkbench.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
@@ -73,6 +72,12 @@ public partial class MainWindowViewModel : ViewModelBase
     private WindowPlacementSettings _windowPlacement = new();
     private bool _isUpdatingBlueprintTypeSelection;
     private ulong? _lastBlueprintCreatorFilterPlayerId;
+    private readonly Dictionary<ulong, PropertyTreeRow> _luaBlockNodeByElementId = new();
+    private readonly Dictionary<ulong, PropertyTreeRow> _htmlRsBlockNodeByElementId = new();
+    private readonly Dictionary<ulong, PropertyTreeRow> _databankBlockNodeByElementId = new();
+    private int _constructBrowserLevel1EntryCount;
+    private long _constructBrowserLevel2EntryCount;
+    private int _blueprintsLevel1EntryCount;
 
     public ObservableCollection<ElementPropertyRecord> ElementProperties { get; } = new();
     public ObservableCollection<ElementPropertyRecord> Dpuyaml6Properties { get; } = new();
@@ -289,6 +294,12 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private string exportProgressText = "Export: idle";
 
+    [ObservableProperty]
+    private int constructDataTabIndex;
+
+    [ObservableProperty]
+    private string gridEntryCountStatus = string.Empty;
+
     public TextWrapping ContentTextWrapping => AutoWrapContent ? TextWrapping.Wrap : TextWrapping.NoWrap;
     public bool CanSaveSelectedLuaBlob => IsLuaSaveNode(ResolveSelectedTreeRow(SelectedDpuyaml6Node));
     public bool CanSaveSelectedHtmlRsBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedContent2Node));
@@ -309,6 +320,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public string BlueprintsPlayerFilterDisplay => BuildBlueprintsPlayerFilterDisplay();
     public string DatabaseAvailabilityDisplay => BuildDatabaseAvailabilityDisplay();
     public string SelectedPlayerIdDisplay => SelectedPlayerNameSuggestion?.PlayerId?.ToString(CultureInfo.InvariantCulture) ?? "-";
+    public bool HasGridEntryCountStatus => !string.IsNullOrWhiteSpace(GridEntryCountStatus);
 
     public MainWindowViewModel()
     {
@@ -318,14 +330,69 @@ public partial class MainWindowViewModel : ViewModelBase
         Content2Model = CreateTreeModel();
         DatabankModel = CreateTreeModel();
 
-        ElementPropertiesModel.SetRoots(Array.Empty<PropertyTreeRow>());
+        PropertyTreeRow[] emptyRoots = Array.Empty<PropertyTreeRow>();
+        ElementPropertiesModel.SetRoots(emptyRoots);
+        UpdateConstructBrowserEntryCounts(emptyRoots);
         Dpuyaml6Model.SetRoot(CreateRootNode("LUA blocks"));
         Content2Model.SetRoot(CreateRootNode("HTML/RS"));
         DatabankModel.SetRoot(CreateRootNode("Databank"));
-        Blueprints.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CanExportBlueprintElementSummary));
+        Blueprints.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(CanExportBlueprintElementSummary));
+            RefreshBlueprintEntryCounts();
+        };
+        RefreshBlueprintEntryCounts();
 
         RestoreSettingsFromDisk();
         _ = InitializeStartupAsync();
+    }
+
+    partial void OnConstructDataTabIndexChanged(int value)
+    {
+        RefreshGridEntryCountStatus();
+    }
+
+    partial void OnGridEntryCountStatusChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasGridEntryCountStatus));
+    }
+
+    private void UpdateConstructBrowserEntryCounts(IReadOnlyList<PropertyTreeRow> roots)
+    {
+        _constructBrowserLevel1EntryCount = roots.Count;
+        _constructBrowserLevel2EntryCount = roots.Sum(root => (long)root.Children.Count);
+        RefreshGridEntryCountStatus();
+    }
+
+    private void RefreshBlueprintEntryCounts()
+    {
+        _blueprintsLevel1EntryCount = Blueprints.Count;
+        RefreshGridEntryCountStatus();
+    }
+
+    private void RefreshGridEntryCountStatus()
+    {
+        GridEntryCountStatus = ConstructDataTabIndex switch
+        {
+            0 => FormatGridEntryCountStatus(
+                "Construct Browser",
+                _constructBrowserLevel1EntryCount,
+                _constructBrowserLevel2EntryCount),
+            1 => FormatGridEntryCountStatus(
+                "Blueprints",
+                _blueprintsLevel1EntryCount),
+            _ => string.Empty
+        };
+    }
+
+    private static string FormatGridEntryCountStatus(string scope, int level1Count, long level2Count)
+    {
+        return $"{scope} L1={level1Count.ToString("N0", CultureInfo.InvariantCulture)}, L2={level2Count.ToString("N0", CultureInfo.InvariantCulture)}";
+    }
+
+    private static string FormatGridEntryCountStatus(string scope, int level1Count)
+    {
+        return $"{scope} L1={level1Count.ToString("N0", CultureInfo.InvariantCulture)}";
     }
 
 }

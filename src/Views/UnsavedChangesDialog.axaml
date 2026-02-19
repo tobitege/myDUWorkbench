@@ -1,6 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        x:Class="myDUWorker.Views.UnsavedChangesDialog"
+        x:Class="myDUWorkbench.Views.UnsavedChangesDialog"
         Title="Unsaved LUA changes"
         Width="560"
         MinWidth="520"

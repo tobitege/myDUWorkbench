@@ -4,7 +4,7 @@ using Avalonia.Media;
 using AvaloniaEdit;
 using AvaloniaEdit.Rendering;
 
-namespace myDUWorker.Helpers;
+namespace myDUWorkbench.Helpers;
 
 public sealed class ExecutionLineHighlighter : IBackgroundRenderer
 {

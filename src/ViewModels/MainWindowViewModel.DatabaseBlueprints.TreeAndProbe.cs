@@ -2,8 +2,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Media;
-using myDUWorker.Models;
-using myDUWorker.Services;
+using myDUWorkbench.Models;
+using myDUWorkbench.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -12,12 +12,11 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.ViewModels;
+namespace myDUWorkbench.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
@@ -132,54 +131,6 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             IsBusy = false;
         }
-    }
-
-    public string BuildGetConstructDataExportJson()
-    {
-        ConstructUpdate? endpointUpdate = _lastEndpointResult?.ConstructUpdate;
-        ConstructInfoPreamble? endpointInfoPreamble = _lastEndpointResult?.ConstructInfoPreamble;
-        DatabaseConstructSnapshot? snapshot = _lastSnapshot;
-
-        if (endpointUpdate is null && endpointInfoPreamble is null && snapshot is null)
-        {
-            throw new InvalidOperationException(
-                "No data available for export. Load DB snapshot and/or probe endpoint first.");
-        }
-
-        Vec3 constructPosition = endpointUpdate?.Position ?? endpointInfoPreamble?.Position ?? snapshot?.Position
-            ?? throw new InvalidOperationException("Cannot resolve construct position.");
-
-        Quat constructRotation = endpointUpdate?.Rotation ?? endpointInfoPreamble?.Rotation ?? snapshot?.Rotation
-            ?? throw new InvalidOperationException("Cannot resolve construct rotation.");
-
-        Vec3 worldVelocity = endpointUpdate?.WorldAbsoluteVelocity
-            ?? snapshot?.ResumeLinearVelocity
-            ?? new Vec3(0, 0, 0);
-
-        Vec3 worldAngularVelocity = endpointUpdate?.WorldAbsoluteAngularVelocity
-            ?? snapshot?.ResumeAngularVelocity
-            ?? new Vec3(0, 0, 0);
-
-        double constructMass = snapshot?.ConstructMass ?? snapshot?.CurrentMass ?? 0d;
-        double constructSpeed = worldVelocity.Magnitude;
-
-        var payload = new
-        {
-            constructPosition = new[] { constructPosition.X, constructPosition.Y, constructPosition.Z },
-            constructRotation = new[] { constructRotation.W, constructRotation.X, constructRotation.Y, constructRotation.Z },
-            worldVelocity = new[] { worldVelocity.X, worldVelocity.Y, worldVelocity.Z },
-            worldAngularVelocity = new[] { worldAngularVelocity.X, worldAngularVelocity.Y, worldAngularVelocity.Z },
-            constructMass,
-            constructSpeed
-        };
-
-        string json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
-        {
-            WriteIndented = true
-        });
-
-        StatusMessage = "getConstructData export JSON prepared.";
-        return json;
     }
 
     public async Task RepairDestroyedElementsAsync(CancellationToken cancellationToken)

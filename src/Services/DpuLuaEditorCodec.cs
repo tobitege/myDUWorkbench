@@ -19,7 +19,7 @@
 // - Section cardinality must match exactly. Partial matches are rejected to prevent silent partial DB rewrites.
 // - Hash-backed payload absence is explicit. If property_type=7 and referenced blob is missing, fail fast with clear error.
 // - Single-section payloads are intentionally flexible: if exactly one DB section and one edited section exist, body replacement is allowed.
-namespace myDUWorker.Services;
+namespace myDUWorkbench.Services;
 
 using K4os.Compression.LZ4;
 using System;

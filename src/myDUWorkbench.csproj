@@ -2,8 +2,8 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net9.0</TargetFramework>
-    <RootNamespace>myDUWorker</RootNamespace>
-    <AssemblyName>myDUWorker</AssemblyName>
+    <RootNamespace>myDUWorkbench</RootNamespace>
+    <AssemblyName>myDUWorkbench</AssemblyName>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>

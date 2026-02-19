@@ -1,6 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        x:Class="myDUWorker.Views.StatusDetailsDialog"
+        x:Class="myDUWorkbench.Views.StatusDetailsDialog"
         Width="920"
         Height="620"
         MinWidth="640"
@@ -32,4 +32,3 @@
         </StackPanel>
     </Grid>
 </Window>
-

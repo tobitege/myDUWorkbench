@@ -4,7 +4,7 @@
 // - SearchConstructsByNameAsync: Returns construct id/name suggestions via ILIKE matching.
 // - ParseBlueprintJson: Flattens blueprint JSON into grid-friendly element property records.
 // - ProbeEndpointAsync: Probes construct endpoint payloads and attempts JSON/binary decoding.
-using myDUWorker.Models;
+using myDUWorkbench.Models;
 using Newtonsoft.Json;
 using Npgsql;
 using System;
@@ -23,7 +23,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.Services;
+namespace myDUWorkbench.Services;
 
 public sealed partial class MyDuDataService
 {

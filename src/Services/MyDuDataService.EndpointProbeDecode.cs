@@ -1,4 +1,4 @@
-using myDUWorker.Models;
+using myDUWorkbench.Models;
 using Newtonsoft.Json;
 using Npgsql;
 using System;
@@ -17,7 +17,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace myDUWorker.Services;
+namespace myDUWorkbench.Services;
 
 public sealed partial class MyDuDataService
 {
@@ -281,11 +281,8 @@ public sealed partial class MyDuDataService
             if (DpuLuaDecoder.TryDecode(raw, serverRootPath, out DpuLuaDecodeResult? decodeResult, out string? decodeError) &&
                 decodeResult is not null)
             {
-                string source = string.IsNullOrWhiteSpace(decodeResult.SourceBlobPath)
-                    ? "db-value"
-                    : decodeResult.SourceBlobPath;
                 return
-                    $"[dpuyaml decoded | sections={decodeResult.SectionCount} | payloadBytes={decodeResult.PayloadBytes} | decodedBytes={decodeResult.DecodedBytes} | source={source}]{Environment.NewLine}{Environment.NewLine}{decodeResult.DecodedText}";
+                    $"[dpuyaml decoded | sections={decodeResult.SectionCount} | payloadBytes={decodeResult.PayloadBytes} | decodedBytes={decodeResult.DecodedBytes}]{Environment.NewLine}{Environment.NewLine}{decodeResult.DecodedText}";
             }
 
             if (!string.IsNullOrWhiteSpace(decodeError))

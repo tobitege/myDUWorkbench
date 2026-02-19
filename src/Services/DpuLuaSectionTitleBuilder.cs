@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-namespace myDUWorker.Services;
+namespace myDUWorkbench.Services;
 
 internal static class DpuLuaSectionTitleBuilder
 {

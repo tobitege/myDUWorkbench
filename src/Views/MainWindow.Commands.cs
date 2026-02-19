@@ -12,11 +12,11 @@ using AvaloniaEdit.Document;
 using AvaloniaEdit.Folding;
 using AvaloniaEdit.Rendering;
 using AvaloniaEdit.TextMate;
-using myDUWorker.Controls;
-using myDUWorker.Helpers;
-using myDUWorker.Models;
-using myDUWorker.Services;
-using myDUWorker.ViewModels;
+using myDUWorkbench.Controls;
+using myDUWorkbench.Helpers;
+using myDUWorkbench.Models;
+using myDUWorkbench.Services;
+using myDUWorkbench.ViewModels;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -33,7 +33,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TextMateSharp.Grammars;
 
-namespace myDUWorker.Views;
+namespace myDUWorkbench.Views;
 
 public partial class MainWindow : Window
 {
@@ -53,32 +53,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnExportGetConstructDataClick(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is not MainWindowViewModel vm)
-        {
-            return;
-        }
-
-        BeginExportProgress(vm, "Export: preparing getConstructData JSON", 10d);
-        try
-        {
-            SetExportProgress(vm, "Export: building payload", 60d);
-            string json = vm.BuildGetConstructDataExportJson();
-            SetExportProgress(vm, "Export: ready", 100d);
-            var dialog = new ExportJsonDialog(json);
-            await dialog.ShowDialog(this);
-        }
-        catch (Exception ex)
-        {
-            vm.StatusMessage = $"Export failed: {ex.Message}";
-        }
-        finally
-        {
-            EndExportProgress(vm);
-        }
-    }
-
     private async void OnRepairDestroyedElementsClick(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel vm)
@@ -94,7 +68,7 @@ public partial class MainWindow : Window
 
         var dialog = new ConfirmationDialog(
             "Repair element flags",
-            "Delete destroyed and restoreCount properties for all elements in the loaded construct?",
+            "Remove 'destroyed' and 'restoreCount' properties for all elements in the loaded construct?",
             "Repair",
             "Cancel");
         bool confirmed = await dialog.ShowDialog<bool>(this);
@@ -382,6 +356,28 @@ public partial class MainWindow : Window
         await ExecuteWithWaitCursorAsync(
             vm => vm.CollapseAllElementPropertiesCommand.Execute(null),
             "Collapsing Construct Browser tree...");
+    }
+
+    private void OnElementPropertiesGridPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _ = sender;
+
+        if (e.ClickCount != 2 || DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!TryResolvePropertyTreeRow(ElementPropertiesGrid.SelectedItem, out PropertyTreeRow? row) ||
+                row?.ElementId is not ulong elementId ||
+                elementId == 0UL)
+            {
+                return;
+            }
+
+            vm.TrySelectElementCodeBlockTab(elementId);
+        }, DispatcherPriority.Background);
     }
 
     private async void OnExpandAllLuaBlocksClick(object? sender, RoutedEventArgs e)
