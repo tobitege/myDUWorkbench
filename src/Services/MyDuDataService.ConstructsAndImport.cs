@@ -494,6 +494,73 @@ public sealed partial class MyDuDataService
         return result;
     }
 
+    public async Task<IReadOnlyList<ElementTypeCountRecord>> GetBlueprintElementTypeCountsAsync(
+        DataConnectionOptions options,
+        IReadOnlyCollection<ulong> blueprintIds,
+        CancellationToken cancellationToken)
+    {
+        if (blueprintIds is null || blueprintIds.Count == 0)
+        {
+            return Array.Empty<ElementTypeCountRecord>();
+        }
+
+        long[] ids = blueprintIds
+            .Where(id => id > 0UL && id <= long.MaxValue)
+            .Select(id => (long)id)
+            .Distinct()
+            .ToArray();
+        if (ids.Length == 0)
+        {
+            return Array.Empty<ElementTypeCountRecord>();
+        }
+
+        await using var connection = new NpgsqlConnection(BuildConnectionString(options));
+        await connection.OpenAsync(cancellationToken);
+
+        const string sql = """
+            SELECT
+                e.element_type_id,
+                COALESCE(
+                    NULLIF(substring(i.yaml from E'displayName:\\s*([^\\n\\r]+)'), ''),
+                    NULLIF(i.name, ''),
+                    ''
+                ) AS display_name,
+                COUNT(*)::bigint AS quantity
+            FROM element e
+            LEFT JOIN item_definition i ON i.id = e.element_type_id
+            WHERE e.blueprint_id = ANY(@blueprintIds)
+            GROUP BY e.element_type_id, display_name
+            ORDER BY e.element_type_id;
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("blueprintIds", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Bigint, ids);
+
+        var rows = new List<ElementTypeCountRecord>();
+        await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            ulong? elementTypeId = TryGetUInt64(reader, 0);
+            if (!elementTypeId.HasValue || elementTypeId.Value == 0UL)
+            {
+                continue;
+            }
+
+            string displayName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1).Trim();
+            long quantity = reader.IsDBNull(2)
+                ? 0L
+                : Convert.ToInt64(reader.GetValue(2), CultureInfo.InvariantCulture);
+            if (quantity <= 0L)
+            {
+                continue;
+            }
+
+            rows.Add(new ElementTypeCountRecord(elementTypeId.Value, displayName, quantity));
+        }
+
+        return rows;
+    }
+
     public Task<IReadOnlyList<UserConstructRecord>> GetUserConstructsSortedByNameAsync(
         DataConnectionOptions options,
         ulong userId,

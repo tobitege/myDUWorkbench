@@ -59,19 +59,31 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private void ApplySettings(WorkbenchSettings settings)
     {
-        if (!string.IsNullOrWhiteSpace(settings.ConstructIdInput))
+        if (settings.HasPersistedPlayerFilterState || !string.IsNullOrWhiteSpace(settings.PlayerIdInput))
         {
-            ConstructIdInput = settings.ConstructIdInput;
+            PlayerIdInput = settings.PlayerIdInput ?? string.Empty;
         }
 
-        if (!string.IsNullOrWhiteSpace(settings.PlayerIdInput))
-        {
-            PlayerIdInput = settings.PlayerIdInput;
-        }
+        bool hasExplicitlyClearedPlayerFilter =
+            settings.HasPersistedPlayerFilterState &&
+            string.IsNullOrWhiteSpace(settings.PlayerIdInput);
 
-        if (!string.IsNullOrWhiteSpace(settings.ConstructNameSearchInput))
+        if (hasExplicitlyClearedPlayerFilter)
         {
-            ConstructNameSearchInput = settings.ConstructNameSearchInput;
+            ConstructIdInput = string.Empty;
+            ConstructNameSearchInput = string.Empty;
+        }
+        else
+        {
+            if (!string.IsNullOrWhiteSpace(settings.ConstructIdInput))
+            {
+                ConstructIdInput = settings.ConstructIdInput;
+            }
+
+            if (!string.IsNullOrWhiteSpace(settings.ConstructNameSearchInput))
+            {
+                ConstructNameSearchInput = settings.ConstructNameSearchInput;
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(settings.PlayerNameSearchInput))
@@ -154,14 +166,18 @@ public partial class MainWindowViewModel : ViewModelBase
         LastSavedFolder = settings.LastSavedFolder ?? string.Empty;
 
         bool hasPersistedConstructContext =
+            !hasExplicitlyClearedPlayerFilter &&
             settings.SelectedConstructSuggestionId.HasValue ||
-            !string.IsNullOrWhiteSpace(settings.SelectedConstructSuggestionName) ||
-            !string.IsNullOrWhiteSpace(settings.ConstructIdInput) ||
-            !string.IsNullOrWhiteSpace(settings.ConstructNameSearchInput);
+            (!hasExplicitlyClearedPlayerFilter && !string.IsNullOrWhiteSpace(settings.SelectedConstructSuggestionName)) ||
+            (!hasExplicitlyClearedPlayerFilter && !string.IsNullOrWhiteSpace(settings.ConstructIdInput)) ||
+            (!hasExplicitlyClearedPlayerFilter && !string.IsNullOrWhiteSpace(settings.ConstructNameSearchInput));
 
-        _restoredConstructSuggestionId = settings.SelectedConstructSuggestionId;
-        _restoredConstructSuggestionName = settings.SelectedConstructSuggestionName ?? string.Empty;
-        if (hasPersistedConstructContext &&
+        _restoredConstructSuggestionId = hasExplicitlyClearedPlayerFilter ? null : settings.SelectedConstructSuggestionId;
+        _restoredConstructSuggestionName = hasExplicitlyClearedPlayerFilter
+            ? string.Empty
+            : settings.SelectedConstructSuggestionName ?? string.Empty;
+        if (!hasExplicitlyClearedPlayerFilter &&
+            hasPersistedConstructContext &&
             !_restoredConstructSuggestionId.HasValue &&
             ulong.TryParse(ConstructIdInput, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong constructIdFromInput))
         {
@@ -191,13 +207,15 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private WorkbenchSettings CreateSettingsSnapshot()
     {
+        bool hasClearedPlayerFilter = string.IsNullOrWhiteSpace(PlayerIdInput);
         ulong? selectedConstructId = SelectedConstructNameSuggestion?.ConstructId;
         string selectedConstructName = SelectedConstructNameSuggestion?.ConstructName ?? string.Empty;
         return new WorkbenchSettings
         {
-            ConstructIdInput = ConstructIdInput,
+            ConstructIdInput = hasClearedPlayerFilter ? string.Empty : ConstructIdInput,
             PlayerIdInput = PlayerIdInput,
-            ConstructNameSearchInput = ConstructNameSearchInput,
+            HasPersistedPlayerFilterState = true,
+            ConstructNameSearchInput = hasClearedPlayerFilter ? string.Empty : ConstructNameSearchInput,
             PlayerNameSearchInput = PlayerNameSearchInput,
             EndpointTemplateInput = EndpointTemplateInput,
             DbHostInput = DbHostInput,
@@ -221,8 +239,8 @@ public partial class MainWindowViewModel : ViewModelBase
             AutoCollapseToFirstLevel = AutoCollapseToFirstLevel,
             LuaVersioningEnabled = LuaVersioningEnabled,
             LastSavedFolder = LastSavedFolder,
-            SelectedConstructSuggestionId = selectedConstructId,
-            SelectedConstructSuggestionName = selectedConstructName,
+            SelectedConstructSuggestionId = hasClearedPlayerFilter ? null : selectedConstructId,
+            SelectedConstructSuggestionName = hasClearedPlayerFilter ? string.Empty : selectedConstructName,
             SelectedElementNodeKey = _selectedElementNodeKey,
             SelectedDpuyamlNodeKey = _selectedDpuyamlNodeKey,
             SelectedContent2NodeKey = _selectedContent2NodeKey,

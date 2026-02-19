@@ -350,6 +350,25 @@ public sealed partial class MyDuDataService
         return result.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
+    public async Task<IReadOnlyList<ElementPropertyRecord>> GetBlueprintElementPropertiesAsync(
+        DataConnectionOptions options,
+        ulong blueprintId,
+        CancellationToken cancellationToken)
+    {
+        if (blueprintId == 0UL)
+        {
+            return Array.Empty<ElementPropertyRecord>();
+        }
+
+        await using var connection = new NpgsqlConnection(BuildConnectionString(options));
+        await connection.OpenAsync(cancellationToken);
+        return await QueryBlueprintElementPropertiesAsync(
+            connection,
+            blueprintId,
+            options.ServerRootPath,
+            cancellationToken);
+    }
+
     private static async Task<JsonObject> QuerySingleBlueprintRowAsync(
         NpgsqlConnection connection,
         ulong blueprintId,

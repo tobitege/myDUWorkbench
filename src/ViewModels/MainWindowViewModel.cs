@@ -280,17 +280,29 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private string blueprintImportProgressText = "Import: idle";
 
+    [ObservableProperty]
+    private bool exportInProgress;
+
+    [ObservableProperty]
+    private double exportProgressPercent;
+
+    [ObservableProperty]
+    private string exportProgressText = "Export: idle";
+
     public TextWrapping ContentTextWrapping => AutoWrapContent ? TextWrapping.Wrap : TextWrapping.NoWrap;
     public bool CanSaveSelectedLuaBlob => IsLuaSaveNode(ResolveSelectedTreeRow(SelectedDpuyaml6Node));
     public bool CanSaveSelectedHtmlRsBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedContent2Node));
     public bool CanSaveSelectedDatabankBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedDatabankNode));
     public bool CanRepairDestroyedElements => !IsBusy && !RepairInProgress && _lastSnapshot is not null && IsDatabaseOnline();
+    public bool CanUseDamagedFilter => _lastSnapshot is not null;
     public bool CanEditBlueprint => SelectedBlueprint is not null && !IsBusy && IsDatabaseOnline();
     public bool CanEditBlueprintMaxUse => CanEditBlueprint && BlueprintEditApplyMaxUse;
     public bool CanCopyBlueprint => CanEditBlueprint;
     public bool CanDeleteBlueprint => CanEditBlueprint;
     public bool CanImportBlueprint => !IsBusy && SelectedPlayerNameSuggestion?.PlayerId is ulong playerId && playerId > 0UL;
     public bool CanSaveBlueprint => CanEditBlueprint && IsBlueprintEditInputValid(out _, out _);
+    public bool CanExportConstructBrowserElementSummary => !IsBusy && HasLoadedConstructBrowserElementData();
+    public bool CanExportBlueprintElementSummary => !IsBusy && IsDatabaseOnline() && Blueprints.Count > 0;
     public string BlueprintEditValidationMessage => BuildBlueprintEditValidationMessage();
     public bool HasBlueprintEditValidationError => !string.IsNullOrWhiteSpace(BlueprintEditValidationMessage);
     public string BlueprintCurrentMaxUseStateDisplay => BuildBlueprintCurrentMaxUseStateDisplay();
@@ -310,6 +322,7 @@ public partial class MainWindowViewModel : ViewModelBase
         Dpuyaml6Model.SetRoot(CreateRootNode("LUA blocks"));
         Content2Model.SetRoot(CreateRootNode("HTML/RS"));
         DatabankModel.SetRoot(CreateRootNode("Databank"));
+        Blueprints.CollectionChanged += (_, _) => OnPropertyChanged(nameof(CanExportBlueprintElementSummary));
 
         RestoreSettingsFromDisk();
         _ = InitializeStartupAsync();

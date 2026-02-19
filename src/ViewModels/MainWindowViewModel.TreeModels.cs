@@ -21,6 +21,14 @@ namespace myDUWorker.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
+    private static readonly string[] BlueprintTopLevelMetadataPropertyNames =
+    {
+        "blueprint_id",
+        "name",
+        "construct_id",
+        "created_at"
+    };
+
     private static HierarchicalModel<PropertyTreeRow> CreateTreeModel()
     {
         var options = new HierarchicalOptions<PropertyTreeRow>
@@ -116,9 +124,203 @@ public partial class MainWindowViewModel : ViewModelBase
             StringComparison.OrdinalIgnoreCase);
     }
 
+    private static Dictionary<string, ElementPropertyRecord> BuildBlueprintTopLevelMetadataByName(
+        IReadOnlyList<ElementPropertyRecord> records)
+    {
+        var metadata = new Dictionary<string, ElementPropertyRecord>(StringComparer.OrdinalIgnoreCase);
+        if (records.Count == 0)
+        {
+            return metadata;
+        }
+
+        int distinctElementCount = records
+            .Select(r => r.ElementId)
+            .Distinct()
+            .Count();
+        if (distinctElementCount < 2)
+        {
+            TryAddBlueprintRootObjectMetadata(records, metadata);
+            return metadata;
+        }
+
+        foreach (string propertyName in BlueprintTopLevelMetadataPropertyNames)
+        {
+            List<ElementPropertyRecord> matches = records
+                .Where(r => string.Equals(NormalizePropertyName(r.Name), propertyName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matches.Count == 0)
+            {
+                continue;
+            }
+
+            int metadataElementCount = matches
+                .Select(r => r.ElementId)
+                .Distinct()
+                .Count();
+            if (metadataElementCount < 2)
+            {
+                continue;
+            }
+
+            string canonicalValue = matches[0].DecodedValue ?? string.Empty;
+            bool valuesAreUniform = matches.All(r => string.Equals(r.DecodedValue ?? string.Empty, canonicalValue, StringComparison.Ordinal));
+            if (!valuesAreUniform)
+            {
+                continue;
+            }
+
+            metadata[propertyName] = matches[0];
+        }
+
+        TryAddBlueprintRootObjectMetadata(records, metadata);
+        return metadata;
+    }
+
+    private static void TryAddBlueprintRootObjectMetadata(
+        IReadOnlyList<ElementPropertyRecord> records,
+        IDictionary<string, ElementPropertyRecord> metadata)
+    {
+        ElementPropertyRecord? rootBlueprintRecord = records.FirstOrDefault(r =>
+            IsBlueprintExportEnvelopeRecord(r) &&
+            string.Equals(NormalizePropertyName(r.Name), "root.Blueprint", StringComparison.OrdinalIgnoreCase));
+        if (rootBlueprintRecord is null || string.IsNullOrWhiteSpace(rootBlueprintRecord.DecodedValue))
+        {
+            return;
+        }
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(rootBlueprintRecord.DecodedValue);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            JsonElement blueprintObject = doc.RootElement;
+            foreach (string metadataName in BlueprintTopLevelMetadataPropertyNames)
+            {
+                if (metadata.ContainsKey(metadataName))
+                {
+                    continue;
+                }
+
+                if (!TryResolveBlueprintMetadataJsonValue(blueprintObject, metadataName, out JsonElement jsonValue))
+                {
+                    continue;
+                }
+
+                if (!TryRenderBlueprintMetadataJsonScalar(jsonValue, out string decodedValue))
+                {
+                    continue;
+                }
+
+                metadata[metadataName] = new ElementPropertyRecord(
+                    rootBlueprintRecord.ElementId,
+                    "Blueprint metadata",
+                    metadataName,
+                    InferBlueprintMetadataPropertyType(jsonValue),
+                    decodedValue,
+                    Encoding.UTF8.GetByteCount(decodedValue));
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static bool TryResolveBlueprintMetadataJsonValue(
+        JsonElement blueprintObject,
+        string metadataName,
+        out JsonElement value)
+    {
+        switch (NormalizePropertyName(metadataName))
+        {
+            case "blueprint_id":
+                return TryGetJsonObjectPropertyIgnoreCase(blueprintObject, out value, "id", "blueprint_id", "blueprintId");
+            case "name":
+                return TryGetJsonObjectPropertyIgnoreCase(blueprintObject, out value, "name");
+            case "construct_id":
+                return TryGetJsonObjectPropertyIgnoreCase(blueprintObject, out value, "construct_id", "constructId");
+            case "created_at":
+                return TryGetJsonObjectPropertyIgnoreCase(blueprintObject, out value, "created_at", "createdAt");
+            default:
+                value = default;
+                return false;
+        }
+    }
+
+    private static bool TryGetJsonObjectPropertyIgnoreCase(
+        JsonElement objectElement,
+        out JsonElement value,
+        params string[] candidateNames)
+    {
+        if (objectElement.ValueKind != JsonValueKind.Object || candidateNames is null || candidateNames.Length == 0)
+        {
+            value = default;
+            return false;
+        }
+
+        foreach (JsonProperty property in objectElement.EnumerateObject())
+        {
+            for (int i = 0; i < candidateNames.Length; i++)
+            {
+                if (!string.Equals(property.Name, candidateNames[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static bool TryRenderBlueprintMetadataJsonScalar(JsonElement jsonValue, out string decodedValue)
+    {
+        switch (jsonValue.ValueKind)
+        {
+            case JsonValueKind.String:
+                decodedValue = jsonValue.GetString() ?? string.Empty;
+                return !string.IsNullOrWhiteSpace(decodedValue);
+            case JsonValueKind.Number:
+                decodedValue = jsonValue.GetRawText();
+                return true;
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+                decodedValue = jsonValue.GetBoolean() ? "true" : "false";
+                return true;
+            default:
+                decodedValue = string.Empty;
+                return false;
+        }
+    }
+
+    private static int InferBlueprintMetadataPropertyType(JsonElement jsonValue)
+    {
+        return jsonValue.ValueKind switch
+        {
+            JsonValueKind.Number => 2,
+            JsonValueKind.True => 1,
+            JsonValueKind.False => 1,
+            _ => 4
+        };
+    }
+
+    private static bool IsBlueprintExportEnvelopeRecord(ElementPropertyRecord record)
+    {
+        return !string.IsNullOrWhiteSpace(record.ElementDisplayName) &&
+               record.ElementDisplayName.StartsWith("BlueprintRoot", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void RebuildPropertyFilterRows(IReadOnlyList<ElementPropertyRecord> records)
     {
         _elementPropertyActiveStates = SanitizeElementPropertyActiveStates(_elementPropertyActiveStates);
+        HashSet<string> blueprintMetadataNames = BuildBlueprintTopLevelMetadataByName(records)
+            .Keys
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (PropertyFilterRecord row in ElementPropertyFilters)
         {
             row.PropertyChanged -= OnElementPropertyFilterChanged;
@@ -127,9 +329,11 @@ public partial class MainWindowViewModel : ViewModelBase
         ElementPropertyFilters.Clear();
 
         string[] propertyNames = records
+            .Where(r => !IsBlueprintExportEnvelopeRecord(r))
             .Select(r => NormalizePropertyName(r.Name))
             .Where(n => !string.IsNullOrWhiteSpace(n))
             .Where(n => !IsElementNameProperty(n))
+            .Where(n => !blueprintMetadataNames.Contains(n))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -226,6 +430,9 @@ public partial class MainWindowViewModel : ViewModelBase
     private void ApplyElementPropertyFilter()
     {
         HashSet<string> activeNames = BuildActivePropertyNameSet();
+        HashSet<string> blueprintMetadataNames = BuildBlueprintTopLevelMetadataByName(_allRegularProperties)
+            .Keys
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         string elementTypeFilter = ElementTypeNameFilterInput?.Trim() ?? string.Empty;
         HashSet<ulong>? damagedElementIds = DamagedOnly
             ? BuildDamagedElementIdSet(_allRegularProperties)
@@ -233,14 +440,20 @@ public partial class MainWindowViewModel : ViewModelBase
         IReadOnlyDictionary<ulong, string>? elementNameById = string.IsNullOrWhiteSpace(elementTypeFilter)
             ? null
             : BuildElementNameById(_allRegularProperties);
+        IReadOnlyDictionary<ulong, string>? preferredElementNameById = string.IsNullOrWhiteSpace(elementTypeFilter)
+            ? null
+            : BuildPreferredElementDisplayNameById(_allRegularProperties);
 
         List<ElementPropertyRecord> filtered = _allRegularProperties
             .Where(r => !IsElementNameProperty(r.Name) &&
+                        !IsBlueprintExportEnvelopeRecord(r) &&
+                        !blueprintMetadataNames.Contains(NormalizePropertyName(r.Name)) &&
                         activeNames.Contains(NormalizePropertyName(r.Name)) &&
                         (damagedElementIds is null || damagedElementIds.Contains(r.ElementId)) &&
                         MatchesElementTypeOrNameFilter(
                             DeriveElementTypeName(r.ElementDisplayName),
                             ResolveElementName(r.ElementId, elementNameById),
+                            ResolveElementName(r.ElementId, preferredElementNameById),
                             elementTypeFilter))
             .ToList();
 
@@ -261,6 +474,9 @@ public partial class MainWindowViewModel : ViewModelBase
         double progressEnd)
     {
         HashSet<string> activeNames = BuildActivePropertyNameSet();
+        HashSet<string> blueprintMetadataNames = BuildBlueprintTopLevelMetadataByName(_allRegularProperties)
+            .Keys
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         string elementTypeFilter = ElementTypeNameFilterInput?.Trim() ?? string.Empty;
         HashSet<ulong>? damagedElementIds = DamagedOnly
             ? BuildDamagedElementIdSet(_allRegularProperties)
@@ -268,14 +484,20 @@ public partial class MainWindowViewModel : ViewModelBase
         IReadOnlyDictionary<ulong, string>? elementNameById = string.IsNullOrWhiteSpace(elementTypeFilter)
             ? null
             : BuildElementNameById(_allRegularProperties);
+        IReadOnlyDictionary<ulong, string>? preferredElementNameById = string.IsNullOrWhiteSpace(elementTypeFilter)
+            ? null
+            : BuildPreferredElementDisplayNameById(_allRegularProperties);
 
         List<ElementPropertyRecord> filtered = _allRegularProperties
             .Where(r => !IsElementNameProperty(r.Name) &&
+                        !IsBlueprintExportEnvelopeRecord(r) &&
+                        !blueprintMetadataNames.Contains(NormalizePropertyName(r.Name)) &&
                         activeNames.Contains(NormalizePropertyName(r.Name)) &&
                         (damagedElementIds is null || damagedElementIds.Contains(r.ElementId)) &&
                         MatchesElementTypeOrNameFilter(
                             DeriveElementTypeName(r.ElementDisplayName),
                             ResolveElementName(r.ElementId, elementNameById),
+                            ResolveElementName(r.ElementId, preferredElementNameById),
                             elementTypeFilter))
             .ToList();
 
@@ -385,7 +607,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private void RestoreElementFilters(ElementFilterSnapshot snapshot, bool applyFilter = true)
     {
         ElementTypeNameFilterInput = snapshot.ElementTypeFilterInput;
-        DamagedOnly = snapshot.DamagedOnly;
+        DamagedOnly = CanUseDamagedFilter && snapshot.DamagedOnly;
 
         _isBulkUpdatingElementPropertyFilters = true;
         try
@@ -411,6 +633,16 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             ApplyElementPropertyFilter();
         }
+    }
+
+    private void RefreshDamagedFilterAvailability()
+    {
+        if (!CanUseDamagedFilter && DamagedOnly)
+        {
+            DamagedOnly = false;
+        }
+
+        OnPropertyChanged(nameof(CanUseDamagedFilter));
     }
 
     private void AddElementTypeFilterHistory(string? filterText)

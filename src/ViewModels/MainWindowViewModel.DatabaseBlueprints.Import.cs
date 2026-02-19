@@ -49,6 +49,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 cts.Token);
 
             _lastSnapshot = snapshot;
+            RefreshDamagedFilterAvailability();
             OnPropertyChanged(nameof(CanRepairDestroyedElements));
             ActiveConstructName = string.IsNullOrWhiteSpace(snapshot.ConstructName)
                 ? snapshot.ConstructId.ToString(CultureInfo.InvariantCulture)
@@ -175,6 +176,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
 
                 _lastSnapshot = null;
+                RefreshDamagedFilterAvailability();
                 OnPropertyChanged(nameof(CanRepairDestroyedElements));
 
                 ActiveConstructName = string.IsNullOrWhiteSpace(importResult.BlueprintName)
@@ -390,7 +392,7 @@ public partial class MainWindowViewModel : ViewModelBase
         foreach (ElementPropertyRecord record in records)
         {
             if (record.ElementId == 0UL ||
-                !string.Equals(record.Name, "elementType", StringComparison.OrdinalIgnoreCase) ||
+                !IsElementTypeIdPropertyName(record.Name) ||
                 string.IsNullOrWhiteSpace(record.DecodedValue))
             {
                 continue;
@@ -409,6 +411,14 @@ public partial class MainWindowViewModel : ViewModelBase
         return result;
     }
 
+    private static bool IsElementTypeIdPropertyName(string? propertyName)
+    {
+        string normalized = NormalizePropertyName(propertyName);
+        return string.Equals(normalized, "elementType", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "element_type_id", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "elementTypeId", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string ReplaceTypeTokenWithDisplayName(string currentDisplayName, string typeDisplayName, ulong typeId)
     {
         if (string.IsNullOrWhiteSpace(currentDisplayName) || string.IsNullOrWhiteSpace(typeDisplayName))
@@ -417,13 +427,20 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         string expectedPrefix = $"type_{typeId.ToString(CultureInfo.InvariantCulture)}";
-        if (!currentDisplayName.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+        if (currentDisplayName.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
         {
-            return currentDisplayName;
+            string typedSuffix = currentDisplayName[expectedPrefix.Length..];
+            return typeDisplayName + typedSuffix;
         }
 
-        string suffix = currentDisplayName[expectedPrefix.Length..];
-        return typeDisplayName + suffix;
+        const string fallbackPrefix = "BlueprintElement";
+        if (currentDisplayName.StartsWith(fallbackPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            string fallbackSuffix = currentDisplayName[fallbackPrefix.Length..];
+            return typeDisplayName + fallbackSuffix;
+        }
+
+        return currentDisplayName;
     }
 
     private void AppendImportNotesToStatus(BlueprintImportResult importResult, string importSourcePath, ref string message)

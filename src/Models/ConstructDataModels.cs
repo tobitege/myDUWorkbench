@@ -101,11 +101,21 @@ public sealed class PropertyTreeRow
         {
             if (!char.IsDigit(idSpan[i]))
             {
-                return value;
+                return NormalizeElementTypeValue(value);
             }
         }
 
-        return value[..bracketStart];
+        return NormalizeElementTypeValue(value[..bracketStart]);
+    }
+
+    private static string NormalizeElementTypeValue(string value)
+    {
+        if (string.Equals(value, "BlueprintElement", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return value;
     }
 }
 
@@ -213,6 +223,11 @@ public sealed record BlueprintDbRecord(
     };
     public string CreatorIdDisplay => CreatorId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-";
 }
+
+public sealed record ElementTypeCountRecord(
+    ulong ElementTypeId,
+    string DisplayName,
+    long Quantity);
 
 public sealed record BlueprintDeleteResult(
     ulong BlueprintId,

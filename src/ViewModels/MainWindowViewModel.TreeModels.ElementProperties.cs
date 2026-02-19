@@ -45,11 +45,19 @@ public partial class MainWindowViewModel : ViewModelBase
         CancellationToken cancellationToken,
         IProgress<TreeBuildProgress>? progress)
     {
-        List<IGrouping<string, ElementPropertyRecord>> typeGroups = records
+        Dictionary<string, ElementPropertyRecord> blueprintMetadataByName = BuildBlueprintTopLevelMetadataByName(records);
+        HashSet<string> blueprintMetadataNames = blueprintMetadataByName
+            .Keys
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        List<ElementPropertyRecord> nonEnvelopeRecords = records
+            .Where(r => !IsBlueprintExportEnvelopeRecord(r))
+            .ToList();
+
+        List<IGrouping<string, ElementPropertyRecord>> typeGroups = nonEnvelopeRecords
             .GroupBy(r => DeriveElementTypeName(r.ElementDisplayName), StringComparer.OrdinalIgnoreCase)
             .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        int totalElements = records
+        int totalElements = nonEnvelopeRecords
             .Select(r => r.ElementId)
             .Distinct()
             .Count();
@@ -81,8 +89,9 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
 
                 ElementPropertyRecord first = byElement.First();
-                string elementName = ResolveElementName(byElement);
-                if (!MatchesElementTypeOrNameFilter(byType.Key, elementName, elementTypeFilter))
+                string customElementName = ResolveElementName(byElement);
+                string preferredElementName = ResolvePreferredElementName(customElementName, first.ElementDisplayName);
+                if (!MatchesElementTypeOrNameFilter(byType.Key, customElementName, preferredElementName, elementTypeFilter))
                 {
                     if (processedElements % reportEvery == 0 || processedElements == totalElements)
                     {
@@ -92,15 +101,18 @@ public partial class MainWindowViewModel : ViewModelBase
                     continue;
                 }
 
-                int totalElementProperties = byElement.Count(p => !IsElementNameProperty(p.Name));
+                int totalElementProperties = byElement.Count(p =>
+                    !IsElementNameProperty(p.Name) &&
+                    !blueprintMetadataNames.Contains(NormalizePropertyName(p.Name)));
                 List<ElementPropertyRecord> visibleProperties = byElement
                     .Where(p => !IsElementNameProperty(p.Name) &&
+                                !blueprintMetadataNames.Contains(NormalizePropertyName(p.Name)) &&
                                 activePropertyNames.Contains(NormalizePropertyName(p.Name)))
                     .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
                 var elementNode = new PropertyTreeRow(
-                    first.ElementDisplayName,
+                    BuildElementNodeLabel(first.ElementDisplayName, preferredElementName),
                     "Element",
                     first.ElementId,
                     first.ElementDisplayName,
@@ -109,11 +121,11 @@ public partial class MainWindowViewModel : ViewModelBase
                     null,
                     $"{visibleProperties.Count}/{totalElementProperties} properties",
                     string.Empty,
-                    elementName);
+                    preferredElementName);
 
                 foreach (ElementPropertyRecord property in visibleProperties)
                 {
-                    elementNode.Children.Add(CreatePropertyLeaf(property, property.Name, "Property", elementName));
+                    elementNode.Children.Add(CreatePropertyLeaf(property, property.Name, "Property", preferredElementName));
                 }
 
                 elementNodes.Add(elementNode);
@@ -146,6 +158,45 @@ public partial class MainWindowViewModel : ViewModelBase
             }
 
             typeRoots.Add(typeNode);
+        }
+
+        if (blueprintMetadataByName.Count > 0)
+        {
+            var metadataRoot = new PropertyTreeRow(
+                "Blueprint metadata",
+                "Blueprint Metadata",
+                null,
+                "Blueprint metadata",
+                string.Empty,
+                null,
+                null,
+                $"{blueprintMetadataByName.Count} fields",
+                string.Empty);
+
+            foreach (string metadataName in BlueprintTopLevelMetadataPropertyNames)
+            {
+                if (!blueprintMetadataByName.TryGetValue(metadataName, out ElementPropertyRecord? metadataRecord))
+                {
+                    continue;
+                }
+
+                metadataRoot.Children.Add(new PropertyTreeRow(
+                    metadataRecord.Name,
+                    "Blueprint Metadata Field",
+                    null,
+                    "Blueprint metadata",
+                    metadataRecord.Name,
+                    metadataRecord.PropertyType,
+                    metadataRecord.ByteLength,
+                    BuildPreview(metadataRecord.DecodedValue),
+                    metadataRecord.DecodedValue,
+                    "Blueprint"));
+            }
+
+            if (metadataRoot.Children.Count > 0)
+            {
+                typeRoots.Insert(0, metadataRoot);
+            }
         }
 
         if (processedElements < totalElements)
@@ -238,6 +289,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _allRegularProperties.RemoveAll(record =>
             IsDestroyedPropertyName(record.Name) ||
             IsRestoreCountPropertyName(record.Name));
+        OnPropertyChanged(nameof(CanExportConstructBrowserElementSummary));
 
         IReadOnlyList<ElementPropertyRecord> snapshotProperties = _lastSnapshot.Properties
             .Where(record =>
@@ -260,7 +312,11 @@ public partial class MainWindowViewModel : ViewModelBase
         return MatchesWildcardPattern(elementTypeName, wildcardFilter);
     }
 
-    private static bool MatchesElementTypeOrNameFilter(string elementTypeName, string elementName, string wildcardFilter)
+    private static bool MatchesElementTypeOrNameFilter(
+        string elementTypeName,
+        string elementName,
+        string preferredDisplayName,
+        string wildcardFilter)
     {
         if (string.IsNullOrWhiteSpace(wildcardFilter))
         {
@@ -268,7 +324,8 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         return MatchesWildcardPattern(elementTypeName, wildcardFilter) ||
-               MatchesWildcardPattern(elementName, wildcardFilter);
+               MatchesWildcardPattern(elementName, wildcardFilter) ||
+               MatchesWildcardPattern(preferredDisplayName, wildcardFilter);
     }
 
     private static Dictionary<ulong, string> BuildElementNameById(IReadOnlyList<ElementPropertyRecord> records)
@@ -288,6 +345,25 @@ public partial class MainWindowViewModel : ViewModelBase
         return names;
     }
 
+    private static Dictionary<ulong, string> BuildPreferredElementDisplayNameById(IReadOnlyList<ElementPropertyRecord> records)
+    {
+        var names = new Dictionary<ulong, string>();
+        foreach (IGrouping<ulong, ElementPropertyRecord> byElement in records.GroupBy(r => r.ElementId))
+        {
+            ElementPropertyRecord first = byElement.First();
+            string customElementName = ResolveElementName(byElement);
+            string preferredElementName = ResolvePreferredElementName(customElementName, first.ElementDisplayName);
+            if (string.IsNullOrWhiteSpace(preferredElementName))
+            {
+                continue;
+            }
+
+            names[byElement.Key] = preferredElementName;
+        }
+
+        return names;
+    }
+
     private static string ResolveElementName(ulong elementId, IReadOnlyDictionary<ulong, string>? namesByElementId)
     {
         if (namesByElementId is null)
@@ -296,6 +372,79 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         return namesByElementId.TryGetValue(elementId, out string? value) ? value : string.Empty;
+    }
+
+    private static string ResolvePreferredElementName(string customElementName, string elementDisplayName)
+    {
+        if (!string.IsNullOrWhiteSpace(customElementName))
+        {
+            return customElementName.Trim();
+        }
+
+        string typeName = DeriveElementTypeName(elementDisplayName);
+        if (string.Equals(typeName, "BlueprintElement", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(typeName, "Elements", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return typeName;
+    }
+
+    private static string BuildElementNodeLabel(string elementDisplayName, string preferredElementName)
+    {
+        string suffix = ExtractElementIdSuffix(elementDisplayName);
+        if (!string.IsNullOrWhiteSpace(preferredElementName))
+        {
+            return string.IsNullOrWhiteSpace(suffix)
+                ? preferredElementName
+                : $"{preferredElementName} {suffix}";
+        }
+
+        string typeLabel = DeriveElementTypeName(elementDisplayName);
+        if (string.Equals(typeLabel, "BlueprintElement", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(typeLabel, "Elements", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.IsNullOrWhiteSpace(suffix)
+                ? "Element"
+                : $"Element {suffix}";
+        }
+
+        return string.IsNullOrWhiteSpace(suffix)
+            ? typeLabel
+            : $"{typeLabel} {suffix}";
+    }
+
+    private static string ExtractElementIdSuffix(string elementDisplayName)
+    {
+        if (string.IsNullOrWhiteSpace(elementDisplayName))
+        {
+            return string.Empty;
+        }
+
+        int bracketStart = elementDisplayName.LastIndexOf(" [", StringComparison.Ordinal);
+        if (bracketStart < 0 || !elementDisplayName.EndsWith("]", StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        int idStart = bracketStart + 2;
+        int idLength = elementDisplayName.Length - idStart - 1;
+        if (idLength <= 0)
+        {
+            return string.Empty;
+        }
+
+        ReadOnlySpan<char> idSpan = elementDisplayName.AsSpan(idStart, idLength);
+        for (int i = 0; i < idSpan.Length; i++)
+        {
+            if (!char.IsDigit(idSpan[i]))
+            {
+                return string.Empty;
+            }
+        }
+
+        return elementDisplayName[bracketStart..];
     }
 
     private static string DeriveElementTypeName(string elementDisplayName)
@@ -323,11 +472,26 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             if (!char.IsDigit(idSpan[i]))
             {
-                return elementDisplayName;
+                return NormalizeElementTypeLabel(elementDisplayName);
             }
         }
 
-        return elementDisplayName[..bracketStart];
+        return NormalizeElementTypeLabel(elementDisplayName[..bracketStart]);
+    }
+
+    private static string NormalizeElementTypeLabel(string typeLabel)
+    {
+        if (string.Equals(typeLabel, "BlueprintElement", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Elements";
+        }
+
+        if (string.Equals(typeLabel, "BlueprintRoot", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Blueprint export envelope";
+        }
+
+        return typeLabel;
     }
 
     private async Task ApplyLoadedPropertyCollectionsAsync(
@@ -378,6 +542,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         _allRegularProperties.Clear();
         _allRegularProperties.AddRange(regularProperties);
+        OnPropertyChanged(nameof(CanExportConstructBrowserElementSummary));
         RebuildPropertyFilterRows(regularProperties);
         if (buildFilteredView)
         {

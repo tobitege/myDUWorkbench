@@ -207,7 +207,43 @@ public sealed partial class MyDuDataService
         await using var cmd = new NpgsqlCommand(sql, connection);
         cmd.Parameters.AddWithValue("constructId", (long)constructId);
         cmd.Parameters.AddWithValue("propertyLimit", propertyLimit);
+        return await ReadElementPropertyRecordsAsync(cmd, serverRootPath, cancellationToken);
+    }
 
+    private static async Task<List<ElementPropertyRecord>> QueryBlueprintElementPropertiesAsync(
+        NpgsqlConnection connection,
+        ulong blueprintId,
+        string serverRootPath,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT ep.element_id,
+                   e.local_id,
+                   COALESCE(
+                       NULLIF(substring(i.yaml from E'displayName:\\s*([^\\n\\r]+)'), ''),
+                       NULLIF(i.name, ''),
+                       'type_' || e.element_type_id::text
+                   ) AS element_display_name,
+                   ep.name,
+                   ep.property_type,
+                   ep.value
+            FROM element_property ep
+            JOIN element e ON e.id = ep.element_id
+            LEFT JOIN item_definition i ON i.id = e.element_type_id
+            WHERE e.blueprint_id = @blueprintId
+            ORDER BY ep.element_id, ep.name;
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("blueprintId", (long)blueprintId);
+        return await ReadElementPropertyRecordsAsync(cmd, serverRootPath, cancellationToken);
+    }
+
+    private static async Task<List<ElementPropertyRecord>> ReadElementPropertyRecordsAsync(
+        NpgsqlCommand cmd,
+        string serverRootPath,
+        CancellationToken cancellationToken)
+    {
         var records = new List<ElementPropertyRecord>();
         await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))

@@ -10,6 +10,7 @@ public sealed class WorkbenchSettings
 {
     public string ConstructIdInput { get; set; } = string.Empty;
     public string PlayerIdInput { get; set; } = string.Empty;
+    public bool HasPersistedPlayerFilterState { get; set; }
     public string ConstructNameSearchInput { get; set; } = string.Empty;
     public string PlayerNameSearchInput { get; set; } = string.Empty;
     public string EndpointTemplateInput { get; set; } = string.Empty;
@@ -49,6 +50,7 @@ public sealed class PersistedWorkbenchSettings
 {
     public string ConstructIdInput { get; set; } = string.Empty;
     public string PlayerIdInput { get; set; } = string.Empty;
+    public bool HasPersistedPlayerFilterState { get; set; }
     public string ConstructNameSearchInput { get; set; } = string.Empty;
     public string PlayerNameSearchInput { get; set; } = string.Empty;
     public string EndpointTemplateInput { get; set; } = string.Empty;

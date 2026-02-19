@@ -22,6 +22,14 @@
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Spacing="8">
+            <TextBlock x:Name="ActionResultText"
+                       VerticalAlignment="Center"
+                       Foreground="DarkSeaGreen"
+                       Text="" />
+            <Button Content="Save to..."
+                    Click="OnSaveToClick" />
+            <Button Content="Copy"
+                    Click="OnCopyClick" />
             <Button Content="Close"
                     Click="OnCloseClick" />
         </StackPanel>

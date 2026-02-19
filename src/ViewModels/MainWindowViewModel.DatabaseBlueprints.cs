@@ -323,6 +323,141 @@ public partial class MainWindowViewModel : ViewModelBase
             cancellationToken);
     }
 
+    public async Task<bool> OpenSelectedBlueprintInConstructBrowserAsync(CancellationToken cancellationToken)
+    {
+        if (SelectedBlueprint is not { } bp)
+        {
+            BlueprintsStatus = "No blueprint selected.";
+            return false;
+        }
+
+        if (IsBusy)
+        {
+            return false;
+        }
+
+        ElementFilterSnapshot filterSnapshot = CaptureElementFilterSnapshot();
+
+        try
+        {
+            IsBusy = true;
+            BlueprintsStatus = $"Opening blueprint {bp.Id} in Construct Browser...";
+            DataConnectionOptions options = BuildDbOptions();
+
+            string exportedJson = await _dataService.ExportBlueprintJsonAsync(
+                options,
+                bp.Id,
+                EndpointTemplateInput,
+                BlueprintImportEndpointInput,
+                excludeVoxels: false,
+                excludeElementsAndLinks: false,
+                cancellationToken);
+
+            BlueprintImportResult importResult = await Task.Run(
+                () => _dataService.ParseBlueprintJson(
+                    exportedJson,
+                    $"blueprint_{bp.Id.ToString(CultureInfo.InvariantCulture)}",
+                    ServerRootPathInput,
+                    NqUtilsDllPathInput),
+                cancellationToken);
+            IReadOnlyList<ElementPropertyRecord> dbElementProperties =
+                await _dataService.GetBlueprintElementPropertiesAsync(options, bp.Id, cancellationToken);
+            if (dbElementProperties.Count > 0)
+            {
+                importResult = importResult with
+                {
+                    Properties = MergeBlueprintPropertyRecords(importResult.Properties, dbElementProperties)
+                };
+            }
+
+            (IReadOnlyList<ElementPropertyRecord> enrichedProperties, int renamedCount) =
+                await TryEnrichBlueprintElementDisplayNamesAsync(importResult.Properties, cancellationToken);
+            if (renamedCount > 0)
+            {
+                importResult = importResult with { Properties = enrichedProperties };
+            }
+
+            ClearFiltersForBlueprintImport(applyFilter: false);
+            _lastSnapshot = null;
+            RefreshDamagedFilterAvailability();
+            OnPropertyChanged(nameof(CanRepairDestroyedElements));
+
+            ActiveConstructName = string.IsNullOrWhiteSpace(importResult.BlueprintName)
+                ? $"Blueprint {bp.Id.ToString(CultureInfo.InvariantCulture)}"
+                : $"{importResult.BlueprintName} [BP {bp.Id.ToString(CultureInfo.InvariantCulture)}]";
+
+            await ApplyLoadedPropertyCollectionsAsync(
+                importResult.Properties,
+                cancellationToken,
+                buildFilteredView: false);
+            RestoreElementFilters(filterSnapshot, applyFilter: false);
+            await ApplyElementPropertyFilterAsync(
+                cancellationToken,
+                progressUpdate: null,
+                progressStart: 0d,
+                progressEnd: 100d);
+            UpdateBlueprintSummary(importResult);
+
+            string openMessage =
+                $"Opened blueprint {bp.Id.ToString(CultureInfo.InvariantCulture)} in Construct Browser ({importResult.ElementCount.ToString(CultureInfo.InvariantCulture)} element(s)).";
+            BlueprintsStatus = openMessage;
+            StatusMessage = openMessage;
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            BlueprintsStatus = "Open blueprint cancelled.";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            RestoreElementFilters(filterSnapshot, applyFilter: false);
+            BlueprintsStatus = $"Open failed: {ex.Message}";
+            return false;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private static IReadOnlyList<ElementPropertyRecord> MergeBlueprintPropertyRecords(
+        IReadOnlyList<ElementPropertyRecord> exportedProperties,
+        IReadOnlyList<ElementPropertyRecord> dbElementProperties)
+    {
+        if (dbElementProperties.Count == 0)
+        {
+            return exportedProperties;
+        }
+
+        var merged = new Dictionary<string, ElementPropertyRecord>(StringComparer.OrdinalIgnoreCase);
+        foreach (ElementPropertyRecord record in exportedProperties)
+        {
+            merged[BuildElementPropertyMergeKey(record)] = record;
+        }
+
+        foreach (ElementPropertyRecord record in dbElementProperties)
+        {
+            merged[BuildElementPropertyMergeKey(record)] = record;
+        }
+
+        return merged.Values
+            .OrderBy(record => record.ElementId)
+            .ThenBy(record => NormalizePropertyName(record.Name), StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string BuildElementPropertyMergeKey(ElementPropertyRecord record)
+    {
+        string normalizedName = NormalizePropertyName(record.Name);
+        if (string.IsNullOrWhiteSpace(normalizedName))
+        {
+            normalizedName = record.Name ?? string.Empty;
+        }
+
+        return record.ElementId.ToString(CultureInfo.InvariantCulture) + "|" + normalizedName;
+    }
+
     private static bool TryNormalizeBlueprintName(string? input, out string normalizedName, out string error)
     {
         normalizedName = string.Empty;

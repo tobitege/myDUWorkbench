@@ -18,6 +18,7 @@ using myDUWorker.Models;
 using myDUWorker.Services;
 using myDUWorker.ViewModels;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -59,15 +60,22 @@ public partial class MainWindow : Window
             return;
         }
 
+        BeginExportProgress(vm, "Export: preparing getConstructData JSON", 10d);
         try
         {
+            SetExportProgress(vm, "Export: building payload", 60d);
             string json = vm.BuildGetConstructDataExportJson();
+            SetExportProgress(vm, "Export: ready", 100d);
             var dialog = new ExportJsonDialog(json);
             await dialog.ShowDialog(this);
         }
         catch (Exception ex)
         {
             vm.StatusMessage = $"Export failed: {ex.Message}";
+        }
+        finally
+        {
+            EndExportProgress(vm);
         }
     }
 
@@ -211,13 +219,17 @@ public partial class MainWindow : Window
 
         try
         {
+            BeginExportProgress(vm, "Export: preparing blueprint JSON", 10d);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            SetExportProgress(vm, "Export: reading blueprint data", 45d);
             string json = await vm.ExportSelectedBlueprintJsonAsync(
                 optionsDialog.ExcludeVoxels,
                 optionsDialog.ExcludeElementsLinks,
                 cts.Token);
+            SetExportProgress(vm, "Export: formatting result", 85d);
 
             vm.BlueprintsStatus = "Blueprint JSON export ready.";
+            SetExportProgress(vm, "Export: ready", 100d);
             var dialog = new ExportJsonDialog(json)
             {
                 Title = "Blueprint Export JSON"
@@ -227,6 +239,237 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             vm.BlueprintsStatus = $"Export failed: {ex.Message}";
+        }
+        finally
+        {
+            EndExportProgress(vm);
+        }
+    }
+
+    private async void OnExportConstructBrowserElementSummaryClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanExportConstructBrowserElementSummary)
+        {
+            vm.StatusMessage = "No Construct Browser element data loaded.";
+            return;
+        }
+
+        IReadOnlyList<ulong> selectedElementIds = GetSelectedElementIdsFromConstructBrowserGrid();
+        var optionsDialog = new ElementTypeSummaryExportDialog("Construct Browser Elements JSON", selectedElementIds.Count);
+        bool confirmed = await optionsDialog.ShowDialog<bool>(this);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        IReadOnlyCollection<ulong>? exportElementIds = optionsDialog.UseSelectedRowsOnly
+            ? selectedElementIds
+            : null;
+
+        await RunElementSummaryExportAsync(
+            vm,
+            "Export: preparing construct browser summary",
+            "Construct Browser element summary export ready.",
+            static (targetVm, message) => targetVm.StatusMessage = message,
+            "Construct Browser elements export failed",
+            "Construct Browser Elements JSON",
+            ct => vm.ExportLoadedElementTypeCountsJsonAsync(
+                optionsDialog.UseDisplayNameField,
+                exportElementIds,
+                ct));
+    }
+
+    private async void OnExportBlueprintElementSummaryClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanExportBlueprintElementSummary)
+        {
+            vm.BlueprintsStatus = "No loaded blueprint data available for export.";
+            return;
+        }
+
+        ulong[] allBlueprintIds = GetAllLoadedBlueprintIds(vm);
+        if (allBlueprintIds.Length == 0)
+        {
+            vm.BlueprintsStatus = "No blueprint rows available for export.";
+            return;
+        }
+
+        IReadOnlyList<ulong> selectedBlueprintIds = GetSelectedBlueprintIds(vm.SelectedBlueprint);
+        var optionsDialog = new ElementTypeSummaryExportDialog("Blueprint Elements JSON", selectedBlueprintIds.Count);
+        bool confirmed = await optionsDialog.ShowDialog<bool>(this);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        IReadOnlyCollection<ulong> exportBlueprintIds = optionsDialog.UseSelectedRowsOnly
+            ? selectedBlueprintIds
+            : allBlueprintIds;
+
+        await RunElementSummaryExportAsync(
+            vm,
+            "Export: preparing blueprint element summary",
+            "Blueprint element summary export ready.",
+            static (targetVm, message) => targetVm.BlueprintsStatus = message,
+            "Blueprint elements export failed",
+            "Blueprint Elements JSON",
+            ct => vm.ExportBlueprintElementTypeCountsJsonAsync(
+                exportBlueprintIds,
+                optionsDialog.UseDisplayNameField,
+                ct));
+    }
+
+    private async void OnOpenBlueprintInConstructBrowserClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanEditBlueprint || vm.SelectedBlueprint is null)
+        {
+            vm.BlueprintsStatus = "No blueprint selected or database offline.";
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            bool opened = await vm.OpenSelectedBlueprintInConstructBrowserAsync(cts.Token);
+            if (opened)
+            {
+                ConstructDataTabControl.SelectedIndex = 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            vm.BlueprintsStatus = $"Open failed: {ex.Message}";
+        }
+    }
+
+    private async void OnExpandAllElementPropertiesClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        await ExecuteWithWaitCursorAsync(
+            vm => vm.ExpandAllElementPropertiesCommand.Execute(null),
+            "Expanding Construct Browser tree...");
+    }
+
+    private async void OnCollapseAllElementPropertiesClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        await ExecuteWithWaitCursorAsync(
+            vm => vm.CollapseAllElementPropertiesCommand.Execute(null),
+            "Collapsing Construct Browser tree...");
+    }
+
+    private async void OnExpandAllLuaBlocksClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        await ExecuteWithWaitCursorAsync(
+            vm => vm.ExpandAllLuaBlocksCommand.Execute(null),
+            "Expanding LUA blocks tree...");
+    }
+
+    private async void OnCollapseAllLuaBlocksClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        await ExecuteWithWaitCursorAsync(
+            vm => vm.CollapseAllLuaBlocksCommand.Execute(null),
+            "Collapsing LUA blocks tree...");
+    }
+
+    private async void OnExpandAllHtmlRsClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        await ExecuteWithWaitCursorAsync(
+            vm => vm.ExpandAllHtmlRsCommand.Execute(null),
+            "Expanding HTML/RS tree...");
+    }
+
+    private async void OnCollapseAllHtmlRsClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        await ExecuteWithWaitCursorAsync(
+            vm => vm.CollapseAllHtmlRsCommand.Execute(null),
+            "Collapsing HTML/RS tree...");
+    }
+
+    private async void OnExpandAllDatabankClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        await ExecuteWithWaitCursorAsync(
+            vm => vm.ExpandAllDatabankCommand.Execute(null),
+            "Expanding Databank tree...");
+    }
+
+    private async void OnCollapseAllDatabankClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        await ExecuteWithWaitCursorAsync(
+            vm => vm.CollapseAllDatabankCommand.Execute(null),
+            "Collapsing Databank tree...");
+    }
+
+    private async Task ExecuteWithWaitCursorAsync(
+        Action<MainWindowViewModel> executeCommand,
+        string? inProgressStatusMessage = null)
+    {
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        Cursor? previousCursor = Cursor;
+        string previousStatusMessage = vm.StatusMessage;
+        string statusMessage = inProgressStatusMessage?.Trim() ?? string.Empty;
+        Cursor = new Cursor(StandardCursorType.Wait);
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(statusMessage))
+            {
+                vm.StatusMessage = statusMessage;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Render);
+            executeCommand(vm);
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(statusMessage) &&
+                string.Equals(vm.StatusMessage, statusMessage, StringComparison.Ordinal))
+            {
+                vm.StatusMessage = previousStatusMessage;
+            }
+
+            Cursor = previousCursor;
         }
     }
 
@@ -500,6 +743,161 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(folderPath))
         {
             vm.LastSavedFolder = folderPath;
+        }
+    }
+
+    private static void BeginExportProgress(MainWindowViewModel vm, string text, double percent)
+    {
+        vm.ExportInProgress = true;
+        vm.ExportProgressText = string.IsNullOrWhiteSpace(text) ? "Export: running" : text;
+        vm.ExportProgressPercent = ClampExportPercent(percent);
+    }
+
+    private static void SetExportProgress(MainWindowViewModel vm, string text, double percent)
+    {
+        vm.ExportProgressText = string.IsNullOrWhiteSpace(text) ? "Export: running" : text;
+        vm.ExportProgressPercent = ClampExportPercent(percent);
+    }
+
+    private static void EndExportProgress(MainWindowViewModel vm)
+    {
+        vm.ExportInProgress = false;
+        vm.ExportProgressPercent = 0d;
+        vm.ExportProgressText = "Export: idle";
+    }
+
+    private static ulong[] GetAllLoadedBlueprintIds(MainWindowViewModel vm)
+    {
+        return vm.Blueprints
+            .Select(static bp => bp.Id)
+            .Where(static id => id > 0UL)
+            .Distinct()
+            .ToArray();
+    }
+
+    private async Task RunElementSummaryExportAsync(
+        MainWindowViewModel vm,
+        string prepareProgressText,
+        string successStatusText,
+        Action<MainWindowViewModel, string> setStatus,
+        string failureStatusPrefix,
+        string dialogTitle,
+        Func<CancellationToken, Task<string>> exportFactory)
+    {
+        try
+        {
+            BeginExportProgress(vm, prepareProgressText, 10d);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            SetExportProgress(vm, "Export: aggregating element counts", 40d);
+            string json = await exportFactory(cts.Token);
+            SetExportProgress(vm, "Export: formatting result", 85d);
+
+            setStatus(vm, successStatusText);
+            SetExportProgress(vm, "Export: ready", 100d);
+            var dialog = new ExportJsonDialog(json)
+            {
+                Title = dialogTitle
+            };
+            await dialog.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            setStatus(vm, $"{failureStatusPrefix}: {ex.Message}");
+        }
+        finally
+        {
+            EndExportProgress(vm);
+        }
+    }
+
+    private static double ClampExportPercent(double percent)
+    {
+        if (percent < 0d)
+        {
+            return 0d;
+        }
+
+        if (percent > 100d)
+        {
+            return 100d;
+        }
+
+        return percent;
+    }
+
+    private IReadOnlyList<ulong> GetSelectedElementIdsFromConstructBrowserGrid()
+    {
+        var selectedIds = new HashSet<ulong>();
+        foreach (object? selected in EnumerateGridSelectedItems(ElementPropertiesGrid))
+        {
+            if (!TryResolvePropertyTreeRow(selected, out PropertyTreeRow? row) ||
+                row?.ElementId is not ulong elementId ||
+                elementId == 0UL)
+            {
+                continue;
+            }
+
+            selectedIds.Add(elementId);
+        }
+
+        if (selectedIds.Count == 0 &&
+            TryResolvePropertyTreeRow(ElementPropertiesGrid.SelectedItem, out PropertyTreeRow? fallbackRow) &&
+            fallbackRow?.ElementId is ulong fallbackId &&
+            fallbackId > 0UL)
+        {
+            selectedIds.Add(fallbackId);
+        }
+
+        return selectedIds.OrderBy(static id => id).ToArray();
+    }
+
+    private IReadOnlyList<ulong> GetSelectedBlueprintIds(BlueprintDbRecord? fallback)
+    {
+        var selectedIds = new HashSet<ulong>();
+        foreach (object? selected in EnumerateGridSelectedItems(BlueprintsGrid))
+        {
+            if (selected is not BlueprintDbRecord row || row.Id == 0UL)
+            {
+                continue;
+            }
+
+            selectedIds.Add(row.Id);
+        }
+
+        if (selectedIds.Count == 0 && fallback is not null && fallback.Id > 0UL)
+        {
+            selectedIds.Add(fallback.Id);
+        }
+
+        return selectedIds.OrderBy(static id => id).ToArray();
+    }
+
+    private static IEnumerable<object?> EnumerateGridSelectedItems(DataGrid grid)
+    {
+        if (grid.SelectedItems is not IList selectedItems || selectedItems.Count == 0)
+        {
+            return Array.Empty<object?>();
+        }
+
+        return selectedItems.Cast<object?>();
+    }
+
+    private static bool TryResolvePropertyTreeRow(object? selected, out PropertyTreeRow? row)
+    {
+        switch (selected)
+        {
+            case HierarchicalNode<PropertyTreeRow> typedNode when typedNode.Item is not null:
+                row = typedNode.Item;
+                return true;
+            case HierarchicalNode node when node.Item is PropertyTreeRow untypedRow:
+                row = untypedRow;
+                return true;
+            case PropertyTreeRow directRow:
+                row = directRow;
+                return true;
+            default:
+                row = null;
+                return false;
         }
     }
 }

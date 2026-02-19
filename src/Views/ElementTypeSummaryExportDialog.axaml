@@ -1,0 +1,73 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="myDUWorker.Views.ElementTypeSummaryExportDialog"
+        Width="470"
+        MinWidth="430"
+        SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="Element Summary Export Options">
+    <Grid Margin="14"
+          RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+          RowSpacing="10">
+        <TextBlock x:Name="HeaderTextBlock"
+                   Grid.Row="0"
+                   FontWeight="SemiBold"
+                   Text="Element summary export" />
+
+        <TextBlock x:Name="DescriptionTextBlock"
+                   Grid.Row="1"
+                   Foreground="#B0B0B0"
+                   TextWrapping="Wrap"
+                   Text="Export distinct element counts grouped by element_type_id." />
+
+        <Border Grid.Row="2"
+                BorderBrush="#505050"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8">
+            <StackPanel Spacing="6">
+                <TextBlock Text="Value field"
+                           FontWeight="SemiBold" />
+                <RadioButton x:Name="NameFieldRadio"
+                             Content="Name"
+                             IsChecked="True" />
+                <RadioButton x:Name="ElementTypeIdFieldRadio">
+                    <TextBlock Text="element_type_id" />
+                </RadioButton>
+            </StackPanel>
+        </Border>
+
+        <Border x:Name="RowScopeBorder"
+                Grid.Row="3"
+                BorderBrush="#505050"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8">
+            <StackPanel Spacing="6">
+                <TextBlock Text="Row scope"
+                           FontWeight="SemiBold" />
+                <RadioButton x:Name="AllRowsRadio"
+                             Content="All rows"
+                             IsChecked="True" />
+                <TextBlock x:Name="RowScopeHintText"
+                           IsVisible="False"
+                           Foreground="#B0B0B0"
+                           TextWrapping="Wrap"
+                           Text="No multi-row selection detected; export will include all rows." />
+                <RadioButton x:Name="SelectedRowsRadio"
+                             Content="Only selected rows" />
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="4"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <Button Content="Cancel"
+                    Click="OnCancelClick" />
+            <Button Content="Export"
+                    Click="OnExportClick" />
+        </StackPanel>
+    </Grid>
+</Window>

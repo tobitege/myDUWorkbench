@@ -44,6 +44,7 @@ public sealed class WorkbenchSettingsService
             {
                 ConstructIdInput = persisted.ConstructIdInput,
                 PlayerIdInput = persisted.PlayerIdInput,
+                HasPersistedPlayerFilterState = persisted.HasPersistedPlayerFilterState,
                 ConstructNameSearchInput = persisted.ConstructNameSearchInput,
                 PlayerNameSearchInput = persisted.PlayerNameSearchInput,
                 EndpointTemplateInput = persisted.EndpointTemplateInput,
@@ -121,6 +122,7 @@ public sealed class WorkbenchSettingsService
         {
             ConstructIdInput = settings.ConstructIdInput,
             PlayerIdInput = settings.PlayerIdInput,
+            HasPersistedPlayerFilterState = settings.HasPersistedPlayerFilterState,
             ConstructNameSearchInput = settings.ConstructNameSearchInput,
             PlayerNameSearchInput = settings.PlayerNameSearchInput,
             EndpointTemplateInput = settings.EndpointTemplateInput,

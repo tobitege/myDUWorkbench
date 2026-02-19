@@ -590,6 +590,12 @@ public partial class MainWindowViewModel : ViewModelBase
 
     partial void OnDamagedOnlyChanged(bool value)
     {
+        if (value && !CanUseDamagedFilter)
+        {
+            DamagedOnly = false;
+            return;
+        }
+
         ApplyElementPropertyFilter();
     }
 
@@ -699,6 +705,7 @@ public partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(BlueprintEditValidationMessage));
         OnPropertyChanged(nameof(HasBlueprintEditValidationError));
         OnPropertyChanged(nameof(CanRepairDestroyedElements));
+        OnPropertyChanged(nameof(CanExportBlueprintElementSummary));
     }
 
     partial void OnAutoConnectNextRetrySecondsChanged(int? value)
@@ -828,6 +835,8 @@ public partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanSaveBlueprint));
         OnPropertyChanged(nameof(BlueprintEditValidationMessage));
         OnPropertyChanged(nameof(HasBlueprintEditValidationError));
+        OnPropertyChanged(nameof(CanExportConstructBrowserElementSummary));
+        OnPropertyChanged(nameof(CanExportBlueprintElementSummary));
     }
 
     partial void OnRepairInProgressChanged(bool value)
