@@ -11,7 +11,7 @@
         x:Class="myDUWorkbench.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Icon="/Assets/avalonia-logo.ico"
-        Title="myDU Construct Workbench"
+        Title="myDUWorkbench by tobitege"
         MinWidth="980"
         MinHeight="720">
 
@@ -26,7 +26,7 @@
                     Spacing="4">
             <TextBlock FontSize="22"
                        FontWeight="Bold"
-                       Text="myDUWorkbench by @tobitege" />
+                       Text="myDUWorkbench (c) 2026 by @tobitege" />
         </StackPanel>
 
         <Border x:Name="MainWorkbenchRoot"
@@ -170,12 +170,16 @@
                                                     Orientation="Horizontal"
                                                     Spacing="6"
                                                     HorizontalAlignment="Left">
-                                            <Button Content="Expand all"
-                                                    Width="110"
-                                                    Click="OnExpandAllElementPropertiesClick" />
-                                            <Button Content="Collapse all"
-                                                    Width="110"
-                                                    Click="OnCollapseAllElementPropertiesClick" />
+                                            <Button Click="OnExpandAllElementPropertiesClick"
+                                                    ToolTip.Tip="Expand all"
+                                                    Padding="8,6">
+                                                <PathIcon Width="14" Height="14" Data="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z" />
+                                            </Button>
+                                            <Button Click="OnCollapseAllElementPropertiesClick"
+                                                    ToolTip.Tip="Collapse all"
+                                                    Padding="8,6">
+                                                <PathIcon Width="14" Height="14" Data="M16.59 5.41L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59zM12 14l-4.59 4.59L8.83 20 12 16.83 15.17 20l1.41-1.41L12 14z" />
+                                            </Button>
                                             <TextBlock Text="Filter"
                                                        VerticalAlignment="Center"
                                                        Margin="10,0,0,0" />
@@ -190,17 +194,25 @@
                                                                 Command="{Binding ApplyElementTypeNameFilterCommand}" />
                                                 </ComboBox.KeyBindings>
                                             </ComboBox>
-                                            <Button Content="Filter"
-                                                    Width="75"
-                                                    Command="{Binding ApplyElementTypeNameFilterCommand}" />
+                                            <Button Width="90"
+                                                    Command="{Binding ApplyElementTypeNameFilterCommand}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z" />
+                                                    <TextBlock Text="Filter" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
                                             <CheckBox Content="Damaged"
                                                       VerticalAlignment="Center"
                                                       Margin="6,0,0,0"
                                                       IsEnabled="{Binding CanUseDamagedFilter}"
                                                       IsChecked="{Binding DamagedOnly}" />
-                                            <Button Content="Clear"
-                                                    Width="70"
-                                                    Command="{Binding ClearElementTypeFilterHistoryCommand}" />
+                                            <Button Width="85"
+                                                    Command="{Binding ClearElementTypeFilterHistoryCommand}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                                                    <TextBlock Text="Clear" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
                                             <Border Width="1"
                                                     Height="24"
                                                     Margin="10,0,6,0"
@@ -210,9 +222,12 @@
                                                     Width="90"
                                                     IsEnabled="{Binding CanRepairDestroyedElements}"
                                                     Click="OnRepairDestroyedElementsClick" />
-                                            <DropDownButton Content="Export to JSON"
-                                                            Width="140"
+                                            <DropDownButton Width="150"
                                                             IsEnabled="{Binding CanExportConstructBrowserElementSummary}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5-5-5 5 1.41 1.41L11 10.33V18h2v-5.33z" />
+                                                    <TextBlock Text="Export to JSON" VerticalAlignment="Center" />
+                                                </StackPanel>
                                                 <DropDownButton.Flyout>
                                                     <MenuFlyout>
                                                         <MenuItem Header="Elements"
@@ -368,34 +383,53 @@
                                                                     Command="{Binding LoadBlueprintsCommand}" />
                                                     </TextBox.KeyBindings>
                                                 </TextBox>
-                                                <Button Content="Load / Refresh"
-                                                        Width="120"
-                                                        Command="{Binding LoadBlueprintsCommand}" />
+                                                <Button Width="140"
+                                                        Command="{Binding LoadBlueprintsCommand}">
+                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                        <PathIcon Width="14" Height="14" Data="M17.65 6.35A8 8 0 1 0 20 12H18A6 6 0 1 1 16.24 7.76L13 11H20V4L17.65 6.35Z" />
+                                                        <TextBlock Text="Load / Refresh" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
                                             </StackPanel>
 
                                             <StackPanel Grid.Row="1"
                                                         Orientation="Horizontal"
                                                         Spacing="6"
                                                         HorizontalAlignment="Left">
-                                                <Button Content="Copy"
-                                                        Width="70"
+                                                <Button Width="85"
                                                         IsEnabled="{Binding CanCopyBlueprint}"
-                                                        Click="OnCopyBlueprintClick" />
-                                                <Button Content="Delete"
-                                                        Width="70"
+                                                        Click="OnCopyBlueprintClick">
+                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                        <PathIcon Width="14" Height="14" Data="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
+                                                        <TextBlock Text="Copy" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Width="90"
                                                         IsEnabled="{Binding CanDeleteBlueprint}"
-                                                        Click="OnDeleteBlueprintClick" />
+                                                        Click="OnDeleteBlueprintClick">
+                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                        <PathIcon Width="14" Height="14" Data="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                                                        <TextBlock Text="Delete" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
                                                 <Button Content="Import Blueprint"
                                                         Width="130"
                                                         IsEnabled="{Binding CanImportBlueprint}"
                                                         Click="OnImportBlueprintClick" />
-                                                <Button Content="Export JSON"
-                                                        Width="120"
+                                                <Button Width="130"
                                                         IsEnabled="{Binding CanEditBlueprint}"
-                                                        Click="OnExportBlueprintJsonClick" />
-                                                <DropDownButton Content="Export to JSON"
-                                                                Width="140"
+                                                        Click="OnExportBlueprintJsonClick">
+                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                        <PathIcon Width="14" Height="14" Data="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5-5-5 5 1.41 1.41L11 10.33V18h2v-5.33z" />
+                                                        <TextBlock Text="Export JSON" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <DropDownButton Width="150"
                                                                 IsEnabled="{Binding CanExportBlueprintElementSummary}">
+                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                        <PathIcon Width="14" Height="14" Data="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5-5-5 5 1.41 1.41L11 10.33V18h2v-5.33z" />
+                                                        <TextBlock Text="Export to JSON" VerticalAlignment="Center" />
+                                                    </StackPanel>
                                                     <DropDownButton.Flyout>
                                                         <MenuFlyout>
                                                             <MenuItem Header="Elements"
@@ -567,19 +601,37 @@
                                                     Orientation="Horizontal"
                                                     Spacing="10"
                                                     HorizontalAlignment="Left">
-                                            <Button Content="Expand all"
-                                                    Click="OnExpandAllLuaBlocksClick" />
-                                            <Button Content="Collapse all"
-                                                    Click="OnCollapseAllLuaBlocksClick" />
-                                            <Button Content="Save as..."
-                                                    Click="OnSaveLuaAsClick"
-                                                    IsEnabled="{Binding CanSaveSelectedLuaBlob}" />
-                                            <Button Content="Edit"
-                                                    Click="OnEditLuaClick"
-                                                    IsEnabled="{Binding CanSaveSelectedLuaBlob}" />
-                                            <CheckBox Content="Auto-wrap"
-                                                      IsChecked="{Binding AutoWrapContent}"
-                                                      Width="120" />
+                                            <Button Click="OnExpandAllLuaBlocksClick"
+                                                    ToolTip.Tip="Expand all"
+                                                    Padding="8,6">
+                                                <PathIcon Width="14" Height="14" Data="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z" />
+                                            </Button>
+                                            <Button Click="OnCollapseAllLuaBlocksClick"
+                                                    ToolTip.Tip="Collapse all"
+                                                    Padding="8,6">
+                                                <PathIcon Width="14" Height="14" Data="M16.59 5.41L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59zM12 14l-4.59 4.59L8.83 20 12 16.83 15.17 20l1.41-1.41L12 14z" />
+                                            </Button>
+                                            <Button Click="OnSaveLuaAsClick"
+                                                    IsEnabled="{Binding CanSaveSelectedLuaBlob}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
+                                                    <TextBlock Text="Save as..." VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Click="OnEditLuaClick"
+                                                    IsEnabled="{Binding CanSaveSelectedLuaBlob}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                                    <TextBlock Text="Edit" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <CheckBox IsChecked="{Binding AutoWrapContent}"
+                                                      Width="120">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3 3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z" />
+                                                    <TextBlock Text="Auto-wrap" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </CheckBox>
                                         </StackPanel>
 
                                         <DataGrid x:Name="LuaBlocksGrid"
@@ -658,16 +710,30 @@
                                                     Orientation="Horizontal"
                                                     Spacing="10"
                                                     HorizontalAlignment="Left">
-                                            <Button Content="Expand all"
-                                                    Click="OnExpandAllHtmlRsClick" />
-                                            <Button Content="Collapse all"
-                                                    Click="OnCollapseAllHtmlRsClick" />
-                                            <Button Content="Save as..."
-                                                    Click="OnSaveHtmlRsAsClick"
-                                                    IsEnabled="{Binding CanSaveSelectedHtmlRsBlob}" />
-                                            <CheckBox Content="Auto-wrap"
-                                                      IsChecked="{Binding AutoWrapContent}"
-                                                      Width="120" />
+                                            <Button Click="OnExpandAllHtmlRsClick"
+                                                    ToolTip.Tip="Expand all"
+                                                    Padding="8,6">
+                                                <PathIcon Width="14" Height="14" Data="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z" />
+                                            </Button>
+                                            <Button Click="OnCollapseAllHtmlRsClick"
+                                                    ToolTip.Tip="Collapse all"
+                                                    Padding="8,6">
+                                                <PathIcon Width="14" Height="14" Data="M16.59 5.41L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59zM12 14l-4.59 4.59L8.83 20 12 16.83 15.17 20l1.41-1.41L12 14z" />
+                                            </Button>
+                                            <Button Click="OnSaveHtmlRsAsClick"
+                                                    IsEnabled="{Binding CanSaveSelectedHtmlRsBlob}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
+                                                    <TextBlock Text="Save as..." VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <CheckBox IsChecked="{Binding AutoWrapContent}"
+                                                      Width="120">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3 3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z" />
+                                                    <TextBlock Text="Auto-wrap" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </CheckBox>
                                         </StackPanel>
 
                                         <DataGrid x:Name="HtmlRsGrid"
@@ -746,16 +812,30 @@
                                                     Orientation="Horizontal"
                                                     Spacing="10"
                                                     HorizontalAlignment="Left">
-                                            <Button Content="Expand all"
-                                                    Click="OnExpandAllDatabankClick" />
-                                            <Button Content="Collapse all"
-                                                    Click="OnCollapseAllDatabankClick" />
-                                            <Button Content="Save as..."
-                                                    Click="OnSaveDatabankAsClick"
-                                                    IsEnabled="{Binding CanSaveSelectedDatabankBlob}" />
-                                            <CheckBox Content="Auto-wrap"
-                                                      IsChecked="{Binding AutoWrapContent}"
-                                                      Width="120" />
+                                            <Button Click="OnExpandAllDatabankClick"
+                                                    ToolTip.Tip="Expand all"
+                                                    Padding="8,6">
+                                                <PathIcon Width="14" Height="14" Data="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z" />
+                                            </Button>
+                                            <Button Click="OnCollapseAllDatabankClick"
+                                                    ToolTip.Tip="Collapse all"
+                                                    Padding="8,6">
+                                                <PathIcon Width="14" Height="14" Data="M16.59 5.41L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59zM12 14l-4.59 4.59L8.83 20 12 16.83 15.17 20l1.41-1.41L12 14z" />
+                                            </Button>
+                                            <Button Click="OnSaveDatabankAsClick"
+                                                    IsEnabled="{Binding CanSaveSelectedDatabankBlob}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
+                                                    <TextBlock Text="Save as..." VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <CheckBox IsChecked="{Binding AutoWrapContent}"
+                                                      Width="120">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <PathIcon Width="14" Height="14" Data="M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3 3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z" />
+                                                    <TextBlock Text="Auto-wrap" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </CheckBox>
                                         </StackPanel>
 
                                         <DataGrid x:Name="DatabankGrid"
@@ -942,10 +1022,14 @@
                                     Padding="8">
                                 <StackPanel Spacing="6">
                                     <TextBlock Text="Connection" />
-                                    <Button Content="Connect now"
-                                            Command="{Binding ConnectDatabaseCommand}"
+                                    <Button Command="{Binding ConnectDatabaseCommand}"
                                             Width="140"
-                                            HorizontalAlignment="Left" />
+                                            HorizontalAlignment="Left">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <PathIcon Width="14" Height="14" Data="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z" />
+                                            <TextBlock Text="Connect now" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
                                 </StackPanel>
                             </Border>
                         </WrapPanel>
@@ -1157,7 +1241,7 @@
                 <WrapPanel Grid.Row="1"
                            Orientation="Horizontal"
                            HorizontalAlignment="Left"
-                           ItemWidth="92">
+                           ItemWidth="110">
                     <Button Content="New"
                             Click="OnLuaEditorNewClick" />
                     <Button Content="Open..."
@@ -1165,8 +1249,12 @@
                     <Button x:Name="LuaEditorSaveButton"
                             Content="Save"
                             Click="OnLuaEditorSaveClick" />
-                    <Button Content="Save as..."
-                            Click="OnLuaEditorSaveAsClick" />
+                    <Button Click="OnLuaEditorSaveAsClick">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <PathIcon Width="14" Height="14" Data="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
+                            <TextBlock Text="Save as..." VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                     <Button x:Name="LuaEditorSaveToDbButton"
                             Content="Save to DB"
                             Click="OnLuaEditorSaveToDbClick" />
@@ -1178,15 +1266,23 @@
                             Click="OnLuaEditorRedoClick" />
                     <Button Content="Cut"
                             Click="OnLuaEditorCutClick" />
-                    <Button Content="Copy"
-                            Click="OnLuaEditorCopyClick" />
+                    <Button Click="OnLuaEditorCopyClick">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <PathIcon Width="14" Height="14" Data="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
+                            <TextBlock Text="Copy" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                     <Button Content="Paste"
                             Click="OnLuaEditorPasteClick" />
                     <ToggleButton x:Name="LuaEditorWordWrapToggle"
-                                  Content="Wrap"
                                   IsChecked="False"
                                   Checked="OnLuaEditorWordWrapChanged"
-                                  Unchecked="OnLuaEditorWordWrapChanged" />
+                                  Unchecked="OnLuaEditorWordWrapChanged">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <PathIcon Width="14" Height="14" Data="M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3 3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z" />
+                            <TextBlock Text="Wrap" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ToggleButton>
                 </WrapPanel>
 
                 <Grid Grid.Row="2"
