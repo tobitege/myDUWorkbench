@@ -222,7 +222,7 @@
                                                     Width="90"
                                                     IsEnabled="{Binding CanRepairDestroyedElements}"
                                                     Click="OnRepairDestroyedElementsClick" />
-                                            <DropDownButton Width="150"
+                                            <DropDownButton Width="165"
                                                             IsEnabled="{Binding CanExportConstructBrowserElementSummary}">
                                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                                     <PathIcon Width="14" Height="14" Data="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5-5-5 5 1.41 1.41L11 10.33V18h2v-5.33z" />
@@ -232,14 +232,17 @@
                                                     <MenuFlyout>
                                                         <MenuItem Header="Elements"
                                                                   Click="OnExportConstructBrowserElementSummaryClick" />
+                                                        <Separator />
                                                         <MenuItem Header="Voxels"
                                                                   Click="OnExportConstructVoxelMaterialsJsonClick" />
+                                                        <MenuItem Header="Voxel Analysis"
+                                                                  Click="OnExportConstructVoxelAnalysisJsonClick" />
                                                         <MenuItem Header="Both"
                                                                   Click="OnExportConstructBrowserBothJsonClick" />
                                                     </MenuFlyout>
                                                 </DropDownButton.Flyout>
                                             </DropDownButton>
-                                            <Button Content="Show Voxel Data"
+                                            <Button Content="Load Voxel Data"
                                                     Width="140"
                                                     IsEnabled="{Binding CanRepairDestroyedElements}"
                                                     Click="OnShowConstructVoxelDataClick" />
@@ -412,36 +415,48 @@
                                                         <TextBlock Text="Delete" VerticalAlignment="Center" />
                                                     </StackPanel>
                                                 </Button>
-                                                <Button Content="Import Blueprint"
-                                                        Width="130"
-                                                        IsEnabled="{Binding CanImportBlueprint}"
-                                                        Click="OnImportBlueprintClick" />
-                                                <Button Width="130"
-                                                        IsEnabled="{Binding CanEditBlueprint}"
-                                                        Click="OnExportBlueprintJsonClick">
+                                                <DropDownButton Width="105"
+                                                                IsEnabled="{Binding CanImportBlueprint}">
                                                     <StackPanel Orientation="Horizontal" Spacing="6">
-                                                        <PathIcon Width="14" Height="14" Data="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5-5-5 5 1.41 1.41L11 10.33V18h2v-5.33z" />
-                                                        <TextBlock Text="Export JSON" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <DropDownButton Width="150"
-                                                                IsEnabled="{Binding CanExportBlueprintElementSummary}">
-                                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                                        <PathIcon Width="14" Height="14" Data="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5-5-5 5 1.41 1.41L11 10.33V18h2v-5.33z" />
-                                                        <TextBlock Text="Export to JSON" VerticalAlignment="Center" />
+                                                        <PathIcon Width="14" Height="14" Data="M19 13H5v-2h14v2zM5 7h14v2H5V7zm7 10 5-5h-3V3h-4v9H7l5 5z" />
+                                                        <TextBlock Text="Import" VerticalAlignment="Center" />
                                                     </StackPanel>
                                                     <DropDownButton.Flyout>
                                                         <MenuFlyout>
+                                                            <MenuItem Header="Import Blueprint"
+                                                                      Click="OnImportBlueprintClick" />
+                                                            <MenuItem Header="Import + Voxel Analysis"
+                                                                      Click="OnImportBlueprintAndAnalyzeVoxelClick" />
+                                                        </MenuFlyout>
+                                                    </DropDownButton.Flyout>
+                                                </DropDownButton>
+                                                <DropDownButton Width="120">
+                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                        <PathIcon Width="14" Height="14" Data="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5-5-5 5 1.41 1.41L11 10.33V18h2v-5.33z" />
+                                                        <TextBlock Text="Export" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                    <DropDownButton.Flyout>
+                                                        <MenuFlyout>
+                                                            <MenuItem Header="Blueprint JSON"
+                                                                      IsEnabled="{Binding CanEditBlueprint}"
+                                                                      Click="OnExportBlueprintJsonClick" />
                                                             <MenuItem Header="Elements"
+                                                                      IsEnabled="{Binding CanExportBlueprintElementSummary}"
                                                                       Click="OnExportBlueprintElementSummaryClick" />
+                                                            <Separator />
                                                             <MenuItem Header="Voxels"
+                                                                      IsEnabled="{Binding CanExportBlueprintElementSummary}"
                                                                       Click="OnExportBlueprintVoxelMaterialsJsonClick" />
-                                                            <MenuItem Header="Both"
+                                                            <MenuItem Header="Voxel Analysis (JSON File)"
+                                                                      IsEnabled="{Binding CanExportBlueprintElementSummary}"
+                                                                      Click="OnAnalyzeBlueprintVoxelJsonFileClick" />
+                                                            <MenuItem Header="Both (Voxels + Analysis)"
+                                                                      IsEnabled="{Binding CanExportBlueprintElementSummary}"
                                                                       Click="OnExportBlueprintBothJsonClick" />
                                                         </MenuFlyout>
                                                     </DropDownButton.Flyout>
                                                 </DropDownButton>
-                                                <Button Content="Show Voxel Data"
+                                                <Button Content="Load Voxel Data"
                                                         Width="140"
                                                         IsEnabled="{Binding CanEditBlueprint}"
                                                         Click="OnShowBlueprintVoxelDataClick" />
@@ -520,7 +535,7 @@
                                                 CornerRadius="4"
                                                 Padding="10"
                                                 Margin="0,0,0,6">
-                                            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                                            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                                                   RowSpacing="8">
                                                 <TextBlock Grid.Row="0"
                                                            FontWeight="SemiBold"
@@ -584,6 +599,24 @@
                                                         HorizontalAlignment="Left"
                                                         IsEnabled="{Binding CanSaveBlueprint}"
                                                         Command="{Binding SaveBlueprintCommand}" />
+
+                                                <WrapPanel Grid.Row="6"
+                                                           Orientation="Horizontal"
+                                                           ItemHeight="32"
+                                                           VerticalAlignment="Center">
+                                                    <TextBlock Margin="0,6,10,0"
+                                                               VerticalAlignment="Center"
+                                                               Text="{Binding SelectedPlayerIdDisplay, StringFormat=Give to Player ID: {0}}" />
+                                                    <Button Content="Give Core BP"
+                                                            Width="120"
+                                                            Margin="0,0,8,0"
+                                                            IsEnabled="{Binding CanGiveBlueprintToPlayer}"
+                                                            Click="OnGiveBlueprintToPlayerCoreClick" />
+                                                    <Button Content="Give Single-use BP"
+                                                            Width="145"
+                                                            IsEnabled="{Binding CanGiveBlueprintToPlayer}"
+                                                            Click="OnGiveBlueprintToPlayerSingleUseClick" />
+                                                </WrapPanel>
                                             </Grid>
                                         </Border>
                                     </Grid>

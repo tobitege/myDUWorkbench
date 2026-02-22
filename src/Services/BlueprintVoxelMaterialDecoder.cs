@@ -26,6 +26,34 @@ public sealed record VoxelMaterialSummary(
     IReadOnlyList<VoxelMaterialEntry> Materials,
     IReadOnlyList<string> Warnings);
 
+public sealed record VoxelCellDataStatistics(
+    long VoxelBlockCount,
+    long VertexSampleCount,
+    int MaterialRunCount,
+    int VertexRunCount);
+
+public sealed record VoxelCellMaterialEntry(
+    string MaterialId,
+    string MaterialToken,
+    long VoxelBlocks);
+
+public sealed record VoxelCellDataDetails(
+    VoxelCellDataStatistics Statistics,
+    IReadOnlyList<VoxelCellMaterialEntry> Materials,
+    bool IsDiff);
+
+public sealed record VoxelMetaMaterialSummary(
+    int CellCount,
+    int ParsedCellCount,
+    int LeafCellCount,
+    int CellsWithEntries,
+    int EntryCount,
+    int ParseFailureCount,
+    int MinH,
+    int MaxH,
+    IReadOnlyDictionary<ulong, ulong> MaterialQuantities,
+    IReadOnlyDictionary<ulong, string> MaterialTokens);
+
 public static class BlueprintVoxelMaterialDecoder
 {
     private const uint MagicLz4 = 0xFB14B6F9;
@@ -34,9 +62,11 @@ public static class BlueprintVoxelMaterialDecoder
 
     private const uint MagicVoxelCellData = 0x27B8A013;
     private const uint MagicVertexGrid = 0xE881339E;
+    private const uint MagicVoxelMetaData = 0x9F81F3C0;
 
     private const double LitersPerVoxelBlock = 15.625d;
     private const int WarningLimit = 25;
+    private const int MetaMaterialEntrySize = 24;
 
     public static VoxelMaterialSummary Summarize(JsonArray cells)
     {
@@ -68,7 +98,8 @@ public static class BlueprintVoxelMaterialDecoder
                 byte[] raw = DecodeBase64Field(voxelBinaryNode);
                 byte[] decoded = DecompressNq(raw);
 
-                ChunkMaterialTotals chunkTotals = ParseVoxelCellData(decoded);
+                ParsedVoxelCellData parsedCellData = ParseVoxelCellDataCore(decoded);
+                ChunkMaterialTotals chunkTotals = parsedCellData.MaterialTotals;
                 foreach ((MaterialAggregateKey key, long count) in chunkTotals.CountsByMaterial)
                 {
                     globalCounts[key] = globalCounts.TryGetValue(key, out long current)
@@ -106,6 +137,245 @@ public static class BlueprintVoxelMaterialDecoder
             warnings);
     }
 
+    public static bool TryDecodeRecordBinaryData(
+        JsonNode? dataNode,
+        out byte[] raw,
+        out byte[] decoded,
+        out string error)
+    {
+        raw = Array.Empty<byte>();
+        decoded = Array.Empty<byte>();
+        error = string.Empty;
+
+        if (dataNode is null)
+        {
+            error = "missing data node";
+            return false;
+        }
+
+        try
+        {
+            raw = DecodeBase64Field(dataNode);
+            decoded = DecompressNq(raw);
+            return true;
+        }
+        catch (Exception ex) when (ex is VoxelDeserializeException || ex is InvalidOperationException)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    public static bool TrySummarizeMetaMaterialQuantities(
+        JsonArray cells,
+        out VoxelMetaMaterialSummary summary,
+        out string error)
+    {
+        if (cells is null)
+        {
+            throw new ArgumentNullException(nameof(cells));
+        }
+
+        summary = new VoxelMetaMaterialSummary(
+            CellCount: cells.Count,
+            ParsedCellCount: 0,
+            LeafCellCount: 0,
+            CellsWithEntries: 0,
+            EntryCount: 0,
+            ParseFailureCount: 0,
+            MinH: 0,
+            MaxH: 0,
+            MaterialQuantities: new Dictionary<ulong, ulong>(),
+            MaterialTokens: new Dictionary<ulong, string>());
+        error = string.Empty;
+
+        var parsedCells = new List<MetaCellSample>(cells.Count);
+        var materialQuantities = new Dictionary<ulong, ulong>();
+        var materialTokens = new Dictionary<ulong, string>();
+        int parseFailureCount = 0;
+        int parsedCellCount = 0;
+        int cellsWithEntries = 0;
+        int entryCount = 0;
+        int? minH = null;
+        int? maxH = null;
+
+        foreach (JsonNode? node in cells)
+        {
+            if (node is not JsonObject chunkObject)
+            {
+                continue;
+            }
+
+            if (!TryParseInt64Field(chunkObject["x"], out long x) ||
+                !TryParseInt64Field(chunkObject["y"], out long y) ||
+                !TryParseInt64Field(chunkObject["z"], out long z) ||
+                !TryParseInt64Field(chunkObject["h"], out long hRaw) ||
+                hRaw < 0L ||
+                hRaw > 62L)
+            {
+                continue;
+            }
+
+            int h = (int)hRaw;
+            minH = !minH.HasValue || h < minH.Value ? h : minH;
+            maxH = !maxH.HasValue || h > maxH.Value ? h : maxH;
+
+            parsedCellCount++;
+
+            Dictionary<ulong, MetaMaterialEntry> entries = new();
+            try
+            {
+                JsonNode metaBinaryNode = ResolveRecordBinaryNode(chunkObject, "meta");
+                byte[] raw = DecodeBase64Field(metaBinaryNode);
+                byte[] decoded = DecompressNq(raw);
+                if (TryParseMetaMaterialEntries(decoded, out entries))
+                {
+                    if (entries.Count > 0)
+                    {
+                        cellsWithEntries++;
+                        entryCount += entries.Count;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is VoxelDeserializeException || ex is InvalidOperationException)
+            {
+                parseFailureCount++;
+            }
+
+            parsedCells.Add(new MetaCellSample(x, y, z, h, entries));
+        }
+
+        if (parsedCells.Count == 0)
+        {
+            error = "no parseable meta cells found";
+            summary = summary with
+            {
+                ParseFailureCount = parseFailureCount,
+                ParsedCellCount = parsedCellCount,
+                MinH = minH ?? 0,
+                MaxH = maxH ?? 0
+            };
+            return false;
+        }
+
+        var leafFlags = new bool[parsedCells.Count];
+        Array.Fill(leafFlags, true);
+        for (int i = 0; i < parsedCells.Count; i++)
+        {
+            MetaCellSample parent = parsedCells[i];
+            for (int j = 0; j < parsedCells.Count; j++)
+            {
+                if (i == j)
+                {
+                    continue;
+                }
+
+                MetaCellSample candidateChild = parsedCells[j];
+                if (IsDescendant(parent, candidateChild))
+                {
+                    leafFlags[i] = false;
+                    break;
+                }
+            }
+        }
+
+        int leafCount = 0;
+        for (int i = 0; i < parsedCells.Count; i++)
+        {
+            if (!leafFlags[i])
+            {
+                continue;
+            }
+
+            leafCount++;
+            foreach ((ulong materialId, MetaMaterialEntry entry) in parsedCells[i].Entries)
+            {
+                materialQuantities[materialId] = materialQuantities.TryGetValue(materialId, out ulong current)
+                    ? current + entry.Quantity
+                    : entry.Quantity;
+
+                if (!materialTokens.ContainsKey(materialId) && !string.IsNullOrWhiteSpace(entry.Token))
+                {
+                    materialTokens[materialId] = entry.Token;
+                }
+            }
+        }
+
+        summary = new VoxelMetaMaterialSummary(
+            CellCount: cells.Count,
+            ParsedCellCount: parsedCellCount,
+            LeafCellCount: leafCount,
+            CellsWithEntries: cellsWithEntries,
+            EntryCount: entryCount,
+            ParseFailureCount: parseFailureCount,
+            MinH: minH ?? 0,
+            MaxH: maxH ?? 0,
+            MaterialQuantities: materialQuantities,
+            MaterialTokens: materialTokens);
+        if (materialQuantities.Count == 0)
+        {
+            error = "no meta material quantities found in leaf cells";
+            return false;
+        }
+
+        return true;
+    }
+
+    public static bool TryParseVoxelCellDataStatistics(
+        byte[] decodedData,
+        out VoxelCellDataStatistics statistics,
+        out string error)
+    {
+        if (TryParseVoxelCellDataDetails(decodedData, out VoxelCellDataDetails details, out error))
+        {
+            statistics = details.Statistics;
+            return true;
+        }
+
+        statistics = new VoxelCellDataStatistics(0L, 0L, 0, 0);
+        return false;
+    }
+
+    public static bool TryParseVoxelCellDataDetails(
+        byte[] decodedData,
+        out VoxelCellDataDetails details,
+        out string error)
+    {
+        details = new VoxelCellDataDetails(
+            new VoxelCellDataStatistics(0L, 0L, 0, 0),
+            Array.Empty<VoxelCellMaterialEntry>(),
+            false);
+        error = string.Empty;
+
+        if (decodedData is null || decodedData.Length == 0)
+        {
+            error = "decoded payload is empty";
+            return false;
+        }
+
+        try
+        {
+            ParsedVoxelCellData parsed = ParseVoxelCellDataCore(decodedData);
+            IReadOnlyList<VoxelCellMaterialEntry> materials = parsed.MaterialTotals.CountsByMaterial
+                .Select(entry => new VoxelCellMaterialEntry(
+                    entry.Key.MaterialId,
+                    entry.Key.MaterialName,
+                    entry.Value))
+                .OrderByDescending(static entry => entry.VoxelBlocks)
+                .ThenBy(static entry => entry.MaterialToken, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(static entry => entry.MaterialId, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            details = new VoxelCellDataDetails(parsed.Statistics, materials, parsed.IsDiff);
+            return true;
+        }
+        catch (Exception ex) when (ex is VoxelDeserializeException || ex is InvalidOperationException)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     private static void AddWarning(ICollection<string> warnings, string warning)
     {
         if (warnings.Count < WarningLimit)
@@ -128,21 +398,26 @@ public static class BlueprintVoxelMaterialDecoder
 
     private static JsonNode ResolveVoxelBinaryNode(JsonObject chunkObject)
     {
+        return ResolveRecordBinaryNode(chunkObject, "voxel");
+    }
+
+    private static JsonNode ResolveRecordBinaryNode(JsonObject chunkObject, string recordName)
+    {
         if (!TryGetPropertyIgnoreCase(chunkObject, "records", out JsonNode? recordsNode) ||
             recordsNode is not JsonObject recordsObject)
         {
             throw new VoxelDeserializeException("Missing records object.");
         }
 
-        if (!TryGetPropertyIgnoreCase(recordsObject, "voxel", out JsonNode? voxelNode) ||
-            voxelNode is not JsonObject voxelObject)
+        if (!TryGetPropertyIgnoreCase(recordsObject, recordName, out JsonNode? recordNode) ||
+            recordNode is not JsonObject recordObject)
         {
-            throw new VoxelDeserializeException("Missing records.voxel object.");
+            throw new VoxelDeserializeException($"Missing records.{recordName} object.");
         }
 
-        if (!TryGetPropertyIgnoreCase(voxelObject, "data", out JsonNode? dataNode) || dataNode is null)
+        if (!TryGetPropertyIgnoreCase(recordObject, "data", out JsonNode? dataNode) || dataNode is null)
         {
-            throw new VoxelDeserializeException("Missing records.voxel.data node.");
+            throw new VoxelDeserializeException($"Missing records.{recordName}.data node.");
         }
 
         if (dataNode is JsonObject dataObject &&
@@ -173,6 +448,109 @@ public static class BlueprintVoxelMaterialDecoder
         return false;
     }
 
+    private static bool TryParseMetaMaterialEntries(
+        byte[] decoded,
+        out Dictionary<ulong, MetaMaterialEntry> entriesByMaterialId)
+    {
+        entriesByMaterialId = new Dictionary<ulong, MetaMaterialEntry>();
+        if (decoded is null || decoded.Length < MetaMaterialEntrySize)
+        {
+            return false;
+        }
+
+        if (BinaryPrimitives.ReadUInt32LittleEndian(decoded.AsSpan(0, 4)) != MagicVoxelMetaData)
+        {
+            return false;
+        }
+
+        int offset = 0;
+        while (offset + MetaMaterialEntrySize <= decoded.Length)
+        {
+            ulong materialId = BinaryPrimitives.ReadUInt64LittleEndian(decoded.AsSpan(offset, 8));
+            ReadOnlySpan<byte> tokenBytes = decoded.AsSpan(offset + 8, 8);
+            uint quantityLow = BinaryPrimitives.ReadUInt32LittleEndian(decoded.AsSpan(offset + 16, 4));
+            uint quantityHigh = BinaryPrimitives.ReadUInt32LittleEndian(decoded.AsSpan(offset + 20, 4));
+            ulong quantity = ((ulong)quantityHigh << 32) | quantityLow;
+
+            if (IsLikelyMetaMaterialEntry(materialId, tokenBytes, quantity))
+            {
+                string token = DecodeShortMaterialName(tokenBytes.ToArray());
+                if (entriesByMaterialId.TryGetValue(materialId, out MetaMaterialEntry current))
+                {
+                    entriesByMaterialId[materialId] = new MetaMaterialEntry(
+                        current.Quantity + quantity,
+                        current.Token);
+                }
+                else
+                {
+                    entriesByMaterialId[materialId] = new MetaMaterialEntry(quantity, token);
+                }
+
+                offset += MetaMaterialEntrySize;
+                continue;
+            }
+
+            offset++;
+        }
+
+        return entriesByMaterialId.Count > 0;
+    }
+
+    private static bool IsLikelyMetaMaterialEntry(ulong materialId, ReadOnlySpan<byte> tokenBytes, ulong quantity)
+    {
+        if (materialId == 0UL || materialId > uint.MaxValue)
+        {
+            return false;
+        }
+
+        if (quantity == 0UL || (quantity % 256UL) != 0UL)
+        {
+            return false;
+        }
+
+        int tokenLength = 0;
+        for (int i = 0; i < tokenBytes.Length; i++)
+        {
+            byte b = tokenBytes[i];
+            if (b == 0)
+            {
+                break;
+            }
+
+            if (!IsTokenChar(b))
+            {
+                return false;
+            }
+
+            tokenLength++;
+        }
+
+        return tokenLength >= 3;
+    }
+
+    private static bool IsTokenChar(byte value)
+    {
+        return value is >= (byte)'0' and <= (byte)'9' ||
+               value is >= (byte)'A' and <= (byte)'Z' ||
+               value is >= (byte)'a' and <= (byte)'z' ||
+               value is (byte)'_' or (byte)'-' or (byte)' ';
+    }
+
+    private static bool IsDescendant(MetaCellSample parent, MetaCellSample child)
+    {
+        if (child.H >= parent.H)
+        {
+            return false;
+        }
+
+        int shift = parent.H - child.H;
+        double scale = Math.Pow(2d, shift);
+
+        return Math.Floor(child.X / scale) == parent.X &&
+               Math.Floor(child.Y / scale) == parent.Y &&
+               Math.Floor(child.Z / scale) == parent.Z;
+    }
+
     private static bool TryParseInt64Field(JsonNode? node, out long value)
     {
         value = 0L;
@@ -199,14 +577,25 @@ public static class BlueprintVoxelMaterialDecoder
             }
         }
 
-        if (node is JsonObject obj &&
-            TryGetPropertyIgnoreCase(obj, "$numberLong", out JsonNode? numberLongNode) &&
-            numberLongNode is JsonValue numberLongValue &&
-            numberLongValue.TryGetValue<string>(out string? wrapped) &&
-            long.TryParse(wrapped, NumberStyles.Integer, CultureInfo.InvariantCulture, out long wrappedParsed))
+        if (node is JsonObject obj)
         {
-            value = wrappedParsed;
-            return true;
+            if (TryGetPropertyIgnoreCase(obj, "$numberLong", out JsonNode? numberLongNode) &&
+                TryParseInt64Field(numberLongNode, out value))
+            {
+                return true;
+            }
+
+            if (TryGetPropertyIgnoreCase(obj, "$numberInt", out JsonNode? numberIntNode) &&
+                TryParseInt64Field(numberIntNode, out value))
+            {
+                return true;
+            }
+
+            if (TryGetPropertyIgnoreCase(obj, "$numberDouble", out JsonNode? numberDoubleNode) &&
+                TryParseInt64Field(numberDoubleNode, out value))
+            {
+                return true;
+            }
         }
 
         return false;
@@ -377,7 +766,7 @@ public static class BlueprintVoxelMaterialDecoder
         return false;
     }
 
-    private static ChunkMaterialTotals ParseVoxelCellData(byte[] data)
+    private static ParsedVoxelCellData ParseVoxelCellDataCore(byte[] data)
     {
         var reader = new Reader(data);
 
@@ -410,10 +799,14 @@ public static class BlueprintVoxelMaterialDecoder
         }
 
         var localMaterialCounts = new Dictionary<int, long>();
+        int materialRunCount = 0;
+        int vertexRunCount = 0;
+        long vertexSampleCount = 0L;
 
         long covered = 0L;
         while (covered < voxelCount)
         {
+            materialRunCount++;
             byte hasMaterial = reader.ReadU8();
             int? materialId = hasMaterial != 0 ? reader.ReadU8() : null;
             int runLength = reader.ReadU8() + 1;
@@ -436,6 +829,7 @@ public static class BlueprintVoxelMaterialDecoder
         covered = 0L;
         while (covered < voxelCount)
         {
+            vertexRunCount++;
             byte flags = reader.ReadU8();
             int runLength = reader.ReadU8() + 1;
 
@@ -460,6 +854,8 @@ public static class BlueprintVoxelMaterialDecoder
                 {
                     throw new VoxelDeserializeException("Sparse vertex inner runs exceed parent run length.");
                 }
+
+                vertexSampleCount += innerRunLength;
             }
         }
 
@@ -482,7 +878,7 @@ public static class BlueprintVoxelMaterialDecoder
                 string.IsNullOrWhiteSpace(shortName) ? "Unknown" : shortName);
         }
 
-        _ = reader.ReadU8(); // is_diff
+        byte isDiff = reader.ReadU8();
 
         var countsByMaterial = new Dictionary<MaterialAggregateKey, long>();
         foreach ((int localId, long count) in localMaterialCounts)
@@ -504,7 +900,14 @@ public static class BlueprintVoxelMaterialDecoder
                 : count;
         }
 
-        return new ChunkMaterialTotals(countsByMaterial);
+        return new ParsedVoxelCellData(
+            new ChunkMaterialTotals(countsByMaterial),
+            new VoxelCellDataStatistics(
+                VoxelBlockCount: voxelCount,
+                VertexSampleCount: vertexSampleCount,
+                MaterialRunCount: materialRunCount,
+                VertexRunCount: vertexRunCount),
+            IsDiff: isDiff != 0);
     }
 
     private static string DecodeShortMaterialName(byte[] rawName)
@@ -526,9 +929,25 @@ public static class BlueprintVoxelMaterialDecoder
     private readonly record struct ChunkMaterialTotals(
         IReadOnlyDictionary<MaterialAggregateKey, long> CountsByMaterial);
 
+    private readonly record struct ParsedVoxelCellData(
+        ChunkMaterialTotals MaterialTotals,
+        VoxelCellDataStatistics Statistics,
+        bool IsDiff);
+
     private readonly record struct MaterialAggregateKey(
         string MaterialId,
         string MaterialName);
+
+    private readonly record struct MetaMaterialEntry(
+        ulong Quantity,
+        string Token);
+
+    private readonly record struct MetaCellSample(
+        long X,
+        long Y,
+        long Z,
+        int H,
+        IReadOnlyDictionary<ulong, MetaMaterialEntry> Entries);
 
     private sealed class Reader
     {

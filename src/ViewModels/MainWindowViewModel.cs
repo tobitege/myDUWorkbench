@@ -313,6 +313,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public bool CanEditBlueprintMaxUse => CanEditBlueprint && BlueprintEditApplyMaxUse;
     public bool CanCopyBlueprint => CanEditBlueprint;
     public bool CanDeleteBlueprint => CanEditBlueprint;
+    public bool CanGiveBlueprintToPlayer => CanEditBlueprint && TryResolveBlueprintTargetPlayerId(out _);
     public bool CanImportBlueprint => !IsBusy && SelectedPlayerNameSuggestion?.PlayerId is ulong playerId && playerId > 0UL;
     public bool CanSaveBlueprint => CanEditBlueprint && IsBlueprintEditInputValid(out _, out _);
     public bool CanExportConstructBrowserElementSummary => !IsBusy && HasLoadedConstructBrowserElementData();

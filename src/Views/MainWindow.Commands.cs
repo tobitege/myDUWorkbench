@@ -171,6 +171,67 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnGiveBlueprintToPlayerCoreClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        await GiveSelectedBlueprintToPlayerAsync(vm, singleUse: false);
+    }
+
+    private async void OnGiveBlueprintToPlayerSingleUseClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        await GiveSelectedBlueprintToPlayerAsync(vm, singleUse: true);
+    }
+
+    private async Task GiveSelectedBlueprintToPlayerAsync(MainWindowViewModel vm, bool singleUse)
+    {
+        if (!vm.CanGiveBlueprintToPlayer || vm.SelectedBlueprint is not { } bp)
+        {
+            vm.BlueprintsStatus = "Select a blueprint and a valid player first.";
+            return;
+        }
+
+        string playerIdText = vm.SelectedPlayerNameSuggestion?.PlayerId?.ToString(CultureInfo.InvariantCulture)
+                              ?? vm.PlayerIdInput?.Trim()
+                              ?? string.Empty;
+        string modeLabel = singleUse ? "Single-use blueprint" : "Core blueprint";
+
+        var dialog = new ConfirmationDialog(
+            "Give Blueprint",
+            $"Give blueprint '{bp.Name}' (ID {bp.Id}) to player {playerIdText} as {modeLabel}?",
+            "Give",
+            "Cancel");
+        bool confirmed = await dialog.ShowDialog<bool>(this);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await vm.GiveSelectedBlueprintToPlayerAsync(singleUse, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            vm.BlueprintsStatus = $"Grant failed: {ex.Message}";
+        }
+    }
+
     private async void OnExportBlueprintJsonClick(object? sender, RoutedEventArgs e)
     {
         _ = sender;
@@ -275,6 +336,35 @@ public partial class MainWindow : Window
         }
 
         await RunConstructVoxelDataAsync(vm, showDialog: true, applyToGrid: false);
+    }
+
+    private async void OnExportConstructVoxelAnalysisJsonClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanRepairDestroyedElements)
+        {
+            vm.StatusMessage = "No loaded DB construct snapshot available for voxel analysis.";
+            return;
+        }
+
+        await RunElementSummaryExportAsync(
+            vm,
+            "Export: analyzing construct voxel blobs",
+            "Construct voxel analysis export ready.",
+            static (targetVm, message) => targetVm.StatusMessage = message,
+            "Construct voxel analysis export failed",
+            "Construct Voxel Analysis JSON",
+            ct => vm.ExportLoadedConstructVoxelAnalysisJsonAsync(ct),
+            timeoutSeconds: 120,
+            exportProgressText: "Export: analyzing voxel blobs",
+            showDialogHandler: json => ShowVoxelAnalysisDialogAsync(json, "Construct Voxel Analysis"));
     }
 
     private async void OnShowConstructVoxelDataClick(object? sender, RoutedEventArgs e)
@@ -445,6 +535,35 @@ public partial class MainWindow : Window
         await RunBlueprintVoxelDataAsync(vm, showDialog: false, applyToGrid: true);
     }
 
+    private async void OnAnalyzeBlueprintVoxelJsonFileClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        IStorageFile? selectedFile = await PickBlueprintJsonFileAsync(vm);
+        if (selectedFile is null)
+        {
+            return;
+        }
+
+        await RunElementSummaryExportAsync(
+            vm,
+            "Export: reading blueprint JSON file",
+            "Blueprint voxel analysis from file ready.",
+            static (targetVm, message) => targetVm.BlueprintsStatus = message,
+            "Blueprint voxel analysis failed",
+            "Blueprint Voxel Analysis JSON",
+            ct => BuildBlueprintVoxelAnalysisFromStorageFileAsync(vm, selectedFile, ct),
+            timeoutSeconds: 120,
+            exportProgressText: "Export: analyzing voxel blobs",
+            showDialogHandler: json => ShowVoxelAnalysisDialogAsync(json, "Blueprint Voxel Analysis"));
+    }
+
     private async Task RunBlueprintVoxelDataAsync(MainWindowViewModel vm, bool showDialog, bool applyToGrid)
     {
         if (!vm.CanEditBlueprint || vm.SelectedBlueprint is null)
@@ -469,6 +588,55 @@ public partial class MainWindow : Window
             refreshConstructBrowserGrid: applyToGrid);
     }
 
+    private async Task<string> BuildBlueprintVoxelAnalysisFromStorageFileAsync(
+        MainWindowViewModel vm,
+        IStorageFile selectedFile,
+        CancellationToken cancellationToken)
+    {
+        await using Stream readStream = await selectedFile.OpenReadAsync();
+        using var reader = new StreamReader(readStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        string json = await reader.ReadToEndAsync(cancellationToken);
+        string sourceName = ResolveStorageFilePath(selectedFile);
+        UpdateLastUsedFolder(vm, sourceName);
+        return await vm.ExportBlueprintVoxelAnalysisFromJsonAsync(json, sourceName, cancellationToken);
+    }
+
+    private async Task<IStorageFile?> PickBlueprintJsonFileAsync(MainWindowViewModel vm)
+    {
+        var options = new FilePickerOpenOptions
+        {
+            Title = "Select Blueprint JSON file",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("JSON files")
+                {
+                    Patterns = new[] {"*.json"}
+                },
+                new FilePickerFileType("All files")
+                {
+                    Patterns = new[] {"*.*"}
+                }
+            }
+        };
+
+        if (!string.IsNullOrWhiteSpace(vm.LastSavedFolder))
+        {
+            Uri? folderUri = TryBuildFolderUri(vm.LastSavedFolder);
+            if (folderUri is not null)
+            {
+                IStorageFolder? folder = await StorageProvider.TryGetFolderFromPathAsync(folderUri);
+                if (folder is not null)
+                {
+                    options.SuggestedStartLocation = folder;
+                }
+            }
+        }
+
+        IReadOnlyList<IStorageFile> selected = await StorageProvider.OpenFilePickerAsync(options);
+        return selected.Count > 0 ? selected[0] : null;
+    }
+
     private async void OnExportBlueprintBothJsonClick(object? sender, RoutedEventArgs e)
     {
         _ = sender;
@@ -479,55 +647,35 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!vm.CanExportBlueprintElementSummary)
-        {
-            vm.BlueprintsStatus = "No loaded blueprint data available for export.";
-            return;
-        }
-
         if (!vm.CanEditBlueprint || vm.SelectedBlueprint is null)
         {
             vm.BlueprintsStatus = "No blueprint selected or database offline.";
             return;
         }
 
-        ulong[] allBlueprintIds = GetAllLoadedBlueprintIds(vm);
-        if (allBlueprintIds.Length == 0)
-        {
-            vm.BlueprintsStatus = "No blueprint rows available for export.";
-            return;
-        }
-
-        IReadOnlyList<ulong> selectedBlueprintIds = GetSelectedBlueprintIds(vm.SelectedBlueprint);
-        var optionsDialog = new ElementTypeSummaryExportDialog("Blueprint Elements JSON", selectedBlueprintIds.Count);
-        bool confirmed = await optionsDialog.ShowDialog<bool>(this);
-        if (!confirmed)
-        {
-            return;
-        }
-
-        IReadOnlyCollection<ulong> exportBlueprintIds = optionsDialog.UseSelectedRowsOnly
-            ? selectedBlueprintIds
-            : allBlueprintIds;
-
-        string voxelJson = string.Empty;
+        ulong blueprintId = vm.SelectedBlueprint.Id;
         await RunElementSummaryExportAsync(
             vm,
-            "Export: preparing blueprint elements + voxels",
-            "Blueprint elements + voxel summary export ready.",
+            "Export: preparing blueprint voxels + analysis",
+            "Blueprint voxels + analysis export ready.",
             static (targetVm, message) => targetVm.BlueprintsStatus = message,
-            "Blueprint elements + voxel summary export failed",
-            "Blueprint Elements + Voxels JSON",
+            "Blueprint voxels + analysis export failed",
+            "Blueprint Voxels + Analysis JSON",
             async ct =>
             {
-                string elementsJson = await vm.ExportBlueprintElementTypeCountsJsonAsync(
-                    exportBlueprintIds,
-                    optionsDialog.UseDisplayNameField,
+                string voxelsJson = await vm.ExportSelectedBlueprintVoxelMaterialSummaryJsonAsync(ct);
+                string blueprintJson = await vm.ExportSelectedBlueprintJsonAsync(
+                    excludeVoxels: false,
+                    excludeElementsAndLinks: false,
                     ct);
-                voxelJson = await vm.ExportSelectedBlueprintVoxelMaterialSummaryJsonAsync(ct);
-                return BuildCombinedExportJson(elementsJson, voxelJson);
+                string analysisJson = await vm.ExportBlueprintVoxelAnalysisFromJsonAsync(
+                    blueprintJson,
+                    $"blueprint_{blueprintId.ToString(CultureInfo.InvariantCulture)}.json",
+                    ct);
+                return BuildVoxelAndAnalysisExportJson(voxelsJson, analysisJson);
             },
-            timeoutSeconds: 120,
+            timeoutSeconds: 150,
+            exportProgressText: "Export: analyzing blueprint voxels + voxel blobs",
             onExportJsonReady: null,
             showDialog: true,
             refreshConstructBrowserGrid: false);
@@ -776,6 +924,26 @@ public partial class MainWindow : Window
             return;
         }
 
+        await RunImportBlueprintWorkflowAsync(vm, openVoxelAnalysisAfterImport: false);
+    }
+
+    private async void OnImportBlueprintAndAnalyzeVoxelClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        await RunImportBlueprintWorkflowAsync(vm, openVoxelAnalysisAfterImport: true);
+    }
+
+    private async Task RunImportBlueprintWorkflowAsync(
+        MainWindowViewModel vm,
+        bool openVoxelAnalysisAfterImport)
+    {
         if (vm.SelectedPlayerNameSuggestion?.PlayerId is not ulong selectedPlayerId || selectedPlayerId == 0UL)
         {
             const string message = "Select a player first (Player ID > 0) before importing a blueprint.";
@@ -814,35 +982,45 @@ public partial class MainWindow : Window
 
             UpdateLastUsedFolder(vm, sourcePath);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
+            string jsonContent;
+            using var importCts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
             if (Path.IsPathRooted(sourcePath) && File.Exists(sourcePath))
             {
-                await vm.ImportBlueprintFileAsync(
-                    sourcePath,
-                    vm.BlueprintImportDryRunMode,
-                    vm.BlueprintImportIntoApp,
-                    vm.BlueprintImportIntoGameDatabase,
-                    vm.BlueprintImportAppendDateIfExists,
-                    cts.Token);
+                jsonContent = await File.ReadAllTextAsync(sourcePath, importCts.Token);
             }
             else if (selectedFile is not null)
             {
                 await using Stream readStream = await selectedFile.OpenReadAsync();
                 using var reader = new StreamReader(readStream, Encoding.UTF8, true);
-                string json = await reader.ReadToEndAsync();
-                await vm.ImportBlueprintJsonAsync(
-                    json,
-                    sourcePath,
-                    vm.BlueprintImportDryRunMode,
-                    vm.BlueprintImportIntoApp,
-                    vm.BlueprintImportIntoGameDatabase,
-                    vm.BlueprintImportAppendDateIfExists,
-                    cts.Token);
+                jsonContent = await reader.ReadToEndAsync(importCts.Token);
             }
             else
             {
                 throw new InvalidOperationException("Selected blueprint file is unavailable.");
             }
+
+            await vm.ImportBlueprintJsonAsync(
+                jsonContent,
+                sourcePath,
+                vm.BlueprintImportDryRunMode,
+                vm.BlueprintImportIntoApp,
+                vm.BlueprintImportIntoGameDatabase,
+                vm.BlueprintImportAppendDateIfExists,
+                importCts.Token);
+
+            if (!openVoxelAnalysisAfterImport)
+            {
+                return;
+            }
+
+            using var analysisCts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            vm.BlueprintsStatus = "Analyzing imported blueprint voxels...";
+            string analysisJson = await vm.ExportBlueprintVoxelAnalysisFromJsonAsync(
+                jsonContent,
+                sourcePath,
+                analysisCts.Token);
+            vm.BlueprintsStatus = "Blueprint import + voxel analysis ready.";
+            await ShowVoxelAnalysisDialogAsync(analysisJson, "Blueprint Voxel Analysis");
         }
         catch (OperationCanceledException)
         {
@@ -1054,6 +1232,21 @@ public partial class MainWindow : Window
         return root.ToJsonString(jsonOptions);
     }
 
+    private static string BuildVoxelAndAnalysisExportJson(string voxelsJson, string voxelAnalysisJson)
+    {
+        var root = new JsonObject
+        {
+            ["voxels"] = ParseJsonNodeOrString(voxelsJson),
+            ["voxelAnalysis"] = ParseJsonNodeOrString(voxelAnalysisJson)
+        };
+
+        var jsonOptions = new JsonSerializerOptions
+        {
+            WriteIndented = true
+        };
+        return root.ToJsonString(jsonOptions);
+    }
+
     private static JsonNode ParseJsonNodeOrString(string json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -1069,6 +1262,15 @@ public partial class MainWindow : Window
         {
             return JsonValue.Create(json)!;
         }
+    }
+
+    private async Task ShowVoxelAnalysisDialogAsync(string json, string title)
+    {
+        var dialog = new VoxelAnalysisDialog(json)
+        {
+            Title = title
+        };
+        await dialog.ShowDialog(this);
     }
 
     private async Task RefreshConstructBrowserGridAsync()
@@ -1094,14 +1296,17 @@ public partial class MainWindow : Window
         int timeoutSeconds = 30,
         Action<MainWindowViewModel, string>? onExportJsonReady = null,
         bool showDialog = true,
-        bool refreshConstructBrowserGrid = false)
+        bool refreshConstructBrowserGrid = false,
+        string exportProgressText = "Export: aggregating element counts",
+        Func<string, string>? dialogJsonTransform = null,
+        Func<string, Task>? showDialogHandler = null)
     {
         try
         {
             vm.LastStatusErrorDetails = string.Empty;
             BeginExportProgress(vm, prepareProgressText, 10d);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-            SetExportProgress(vm, "Export: aggregating element counts", 40d);
+            SetExportProgress(vm, exportProgressText, 40d);
             string json = await exportFactory(cts.Token);
             onExportJsonReady?.Invoke(vm, json);
             if (refreshConstructBrowserGrid)
@@ -1115,11 +1320,19 @@ public partial class MainWindow : Window
             SetExportProgress(vm, "Export: ready", 100d);
             if (showDialog)
             {
-                var dialog = new ExportJsonDialog(json)
+                if (showDialogHandler is not null)
                 {
-                    Title = dialogTitle
-                };
-                await dialog.ShowDialog(this);
+                    await showDialogHandler(json);
+                }
+                else
+                {
+                    string dialogJson = dialogJsonTransform is null ? json : dialogJsonTransform(json);
+                    var dialog = new ExportJsonDialog(dialogJson)
+                    {
+                        Title = dialogTitle
+                    };
+                    await dialog.ShowDialog(this);
+                }
             }
         }
         catch (Exception ex)

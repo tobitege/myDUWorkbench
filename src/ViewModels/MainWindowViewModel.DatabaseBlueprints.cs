@@ -295,6 +295,54 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    public async Task GiveSelectedBlueprintToPlayerAsync(bool singleUse, CancellationToken cancellationToken)
+    {
+        if (SelectedBlueprint is not { } bp)
+        {
+            BlueprintsStatus = "No blueprint selected.";
+            return;
+        }
+
+        if (!TryResolveBlueprintTargetPlayerId(out ulong playerId))
+        {
+            BlueprintsStatus = "Select a valid player (Player ID > 0) before giving a blueprint.";
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            string modeLabel = singleUse ? "single-use" : "core";
+            BlueprintsStatus = $"Giving blueprint {bp.Id} to player {playerId} ({modeLabel})...";
+
+            DataConnectionOptions options = BuildDbOptions();
+            BlueprintGrantResult result = await _dataService.GiveBlueprintToPlayerInventoryAsync(
+                options,
+                bp.Id,
+                playerId,
+                singleUse,
+                cancellationToken);
+
+            if (result.AlreadyPresent)
+            {
+                BlueprintsStatus = result.Note;
+                return;
+            }
+
+            BlueprintsStatus =
+                $"Blueprint {bp.Id} granted to player {playerId} as {(singleUse ? "SingleUseBlueprint" : "Blueprint")} in slot {result.SlotNumber.ToString(CultureInfo.InvariantCulture)}.";
+        }
+        catch (Exception ex)
+        {
+            BlueprintsStatus = $"Grant failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+            OnPropertyChanged(nameof(CanGiveBlueprintToPlayer));
+        }
+    }
+
     public string? ValidateBlueprintNameInput(string? candidate)
     {
         return TryNormalizeBlueprintName(candidate, out _, out string error)
@@ -321,6 +369,26 @@ public partial class MainWindowViewModel : ViewModelBase
             excludeVoxels,
             excludeElementsAndLinks,
             cancellationToken);
+    }
+
+    private bool TryResolveBlueprintTargetPlayerId(out ulong playerId)
+    {
+        if (SelectedPlayerNameSuggestion?.PlayerId is ulong selectedPlayerId && selectedPlayerId > 0UL)
+        {
+            playerId = selectedPlayerId;
+            return true;
+        }
+
+        string raw = PlayerIdInput?.Trim() ?? string.Empty;
+        if (ulong.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed) &&
+            parsed > 0UL)
+        {
+            playerId = parsed;
+            return true;
+        }
+
+        playerId = 0UL;
+        return false;
     }
 
     public async Task<bool> OpenSelectedBlueprintInConstructBrowserAsync(CancellationToken cancellationToken)

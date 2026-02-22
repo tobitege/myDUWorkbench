@@ -249,3 +249,13 @@ public sealed record BlueprintCopyResult(
     int ElementRowsCopied,
     int ElementPropertyRowsCopied,
     string CopyNote);
+
+public sealed record BlueprintGrantResult(
+    ulong BlueprintId,
+    ulong PlayerId,
+    bool SingleUse,
+    ulong ItemTypeId,
+    short SlotNumber,
+    int InventoryRowsInserted,
+    bool AlreadyPresent,
+    string Note);

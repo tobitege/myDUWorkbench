@@ -268,6 +268,562 @@ public sealed partial class MyDuDataService
         return new BlueprintUpdateResult(blueprintId, rowsUpdated);
     }
 
+    public async Task<BlueprintGrantResult> GiveBlueprintToPlayerInventoryAsync(
+        DataConnectionOptions options,
+        ulong blueprintId,
+        ulong playerId,
+        bool singleUse,
+        CancellationToken cancellationToken)
+    {
+        if (blueprintId == 0UL)
+        {
+            throw new ArgumentOutOfRangeException(nameof(blueprintId), "Blueprint id must be > 0.");
+        }
+
+        if (playerId == 0UL)
+        {
+            throw new ArgumentOutOfRangeException(nameof(playerId), "Player id must be > 0.");
+        }
+
+        if (blueprintId > long.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(blueprintId), "Blueprint id exceeds bigint range.");
+        }
+
+        if (playerId > long.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(playerId), "Player id exceeds bigint range.");
+        }
+
+        const ulong coreBlueprintItemTypeFallback = 3823417343UL;
+        const ulong singleUseBlueprintItemTypeFallback = 1909358165UL;
+        string itemTypeName = singleUse ? "SingleUseBlueprint" : "Blueprint";
+        ulong itemTypeIdFallback = singleUse ? singleUseBlueprintItemTypeFallback : coreBlueprintItemTypeFallback;
+
+        await using var connection = new NpgsqlConnection(BuildConnectionString(options));
+        await connection.OpenAsync(cancellationToken);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        const string blueprintExistsSql = "SELECT EXISTS(SELECT 1 FROM blueprint WHERE id = @blueprintId);";
+        await using (var blueprintExistsCmd = new NpgsqlCommand(blueprintExistsSql, connection, transaction))
+        {
+            blueprintExistsCmd.Parameters.AddWithValue("blueprintId", (long)blueprintId);
+            object? scalar = await blueprintExistsCmd.ExecuteScalarAsync(cancellationToken);
+            bool exists = scalar is bool boolean && boolean;
+            if (!exists)
+            {
+                throw new InvalidOperationException($"Blueprint {blueprintId} does not exist.");
+            }
+        }
+
+        const string playerExistsSql = "SELECT EXISTS(SELECT 1 FROM player WHERE id = @playerId);";
+        await using (var playerExistsCmd = new NpgsqlCommand(playerExistsSql, connection, transaction))
+        {
+            playerExistsCmd.Parameters.AddWithValue("playerId", (long)playerId);
+            object? scalar = await playerExistsCmd.ExecuteScalarAsync(cancellationToken);
+            bool exists = scalar is bool boolean && boolean;
+            if (!exists)
+            {
+                throw new InvalidOperationException($"Player {playerId} does not exist.");
+            }
+        }
+
+        ulong itemTypeId = itemTypeIdFallback;
+        const string resolveItemTypeSql = """
+            SELECT id::bigint
+            FROM item_definition
+            WHERE name = @itemTypeName
+            LIMIT 1;
+            """;
+        await using (var resolveItemTypeCmd = new NpgsqlCommand(resolveItemTypeSql, connection, transaction))
+        {
+            resolveItemTypeCmd.Parameters.AddWithValue("itemTypeName", itemTypeName);
+            object? scalar = await resolveItemTypeCmd.ExecuteScalarAsync(cancellationToken);
+            if (scalar is not null &&
+                scalar != DBNull.Value &&
+                ulong.TryParse(
+                    Convert.ToString(scalar, CultureInfo.InvariantCulture),
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out ulong parsed) &&
+                parsed > 0UL)
+            {
+                itemTypeId = parsed;
+            }
+        }
+
+        BlueprintGrantPayloadContext grantPayloadContext = await LoadBlueprintGrantPayloadContextAsync(
+            connection,
+            transaction,
+            blueprintId,
+            cancellationToken);
+
+        short? existingSlotBeforeRuntimeAttempt = await TryGetBlueprintInventorySlotAsync(
+            connection,
+            transaction,
+            playerId,
+            itemTypeId,
+            blueprintId,
+            cancellationToken);
+
+        GameplayInventoryGrantAttemptResult runtimeAttempt = await TryGrantBlueprintViaGameplayInventoryApiAsync(
+            options,
+            blueprintId,
+            playerId,
+            itemTypeId,
+            singleUse,
+            grantPayloadContext,
+            cancellationToken);
+
+        if (runtimeAttempt.Succeeded)
+        {
+            short? slotAfterRuntimeAttempt = await TryGetBlueprintInventorySlotAsync(
+                connection,
+                transaction,
+                playerId,
+                itemTypeId,
+                blueprintId,
+                cancellationToken);
+
+            if (slotAfterRuntimeAttempt.HasValue)
+            {
+                bool alreadyPresent = existingSlotBeforeRuntimeAttempt.HasValue;
+                int inserted = alreadyPresent ? 0 : 1;
+                await transaction.CommitAsync(cancellationToken);
+                return new BlueprintGrantResult(
+                    blueprintId,
+                    playerId,
+                    singleUse,
+                    itemTypeId,
+                    slotAfterRuntimeAttempt.Value,
+                    InventoryRowsInserted: inserted,
+                    AlreadyPresent: alreadyPresent,
+                    Note: runtimeAttempt.Note);
+            }
+        }
+
+        short? existingSlot = await TryGetBlueprintInventorySlotAsync(
+            connection,
+            transaction,
+            playerId,
+            itemTypeId,
+            blueprintId,
+            cancellationToken);
+        if (existingSlot.HasValue)
+        {
+            string existingSlotNote =
+                $"Blueprint already present in inventory at slot {existingSlot.Value.ToString(CultureInfo.InvariantCulture)}.";
+            string note = runtimeAttempt.Succeeded
+                ? $"{runtimeAttempt.Note} {existingSlotNote}"
+                : $"{existingSlotNote} Gameplay runtime grant unavailable: {runtimeAttempt.Note}";
+            await transaction.CommitAsync(cancellationToken);
+            return new BlueprintGrantResult(
+                blueprintId,
+                playerId,
+                singleUse,
+                itemTypeId,
+                existingSlot.Value,
+                InventoryRowsInserted: 0,
+                AlreadyPresent: true,
+                Note: note);
+        }
+
+        const string nextSlotSql = """
+            SELECT COALESCE(MAX(slot_number), -1) + 1
+            FROM player_inventory
+            WHERE player_id = @playerId;
+            """;
+        int startSlot;
+        await using (var nextSlotCmd = new NpgsqlCommand(nextSlotSql, connection, transaction))
+        {
+            nextSlotCmd.Parameters.AddWithValue("playerId", (long)playerId);
+            object? scalar = await nextSlotCmd.ExecuteScalarAsync(cancellationToken);
+            startSlot = scalar is null || scalar == DBNull.Value
+                ? 0
+                : Convert.ToInt32(scalar, CultureInfo.InvariantCulture);
+        }
+
+        const string insertSql = """
+            INSERT INTO player_inventory (slot_number, item_id, quantity, item_type_id, player_id, owner_id)
+            VALUES (@slotNumber, @itemId, @quantity, @itemTypeId, @playerId, NULL)
+            ON CONFLICT (player_id, slot_number) DO NOTHING;
+            """;
+        await using var insertCmd = new NpgsqlCommand(insertSql, connection, transaction);
+        insertCmd.Parameters.Add("slotNumber", NpgsqlTypes.NpgsqlDbType.Smallint);
+        insertCmd.Parameters.Add("itemId", NpgsqlTypes.NpgsqlDbType.Bigint);
+        insertCmd.Parameters.Add("quantity", NpgsqlTypes.NpgsqlDbType.Bigint);
+        insertCmd.Parameters.Add("itemTypeId", NpgsqlTypes.NpgsqlDbType.Bigint);
+        insertCmd.Parameters.Add("playerId", NpgsqlTypes.NpgsqlDbType.Bigint);
+
+        insertCmd.Parameters["itemId"].Value = (long)blueprintId;
+        insertCmd.Parameters["quantity"].Value = 1L;
+        insertCmd.Parameters["itemTypeId"].Value = (long)itemTypeId;
+        insertCmd.Parameters["playerId"].Value = (long)playerId;
+
+        const int maxAttempts = 2048;
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            int candidateSlot = startSlot + attempt;
+            if (candidateSlot < 0 || candidateSlot > short.MaxValue)
+            {
+                break;
+            }
+
+            insertCmd.Parameters["slotNumber"].Value = (short)candidateSlot;
+            int inserted = await insertCmd.ExecuteNonQueryAsync(cancellationToken);
+            if (inserted > 0)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                string fallbackNote = runtimeAttempt.Succeeded
+                    ? $"Granted as {itemTypeName} in slot {(short)candidateSlot}."
+                    : $"Granted as {itemTypeName} in slot {(short)candidateSlot} (runtime API unavailable: {runtimeAttempt.Note}).";
+                return new BlueprintGrantResult(
+                    blueprintId,
+                    playerId,
+                    singleUse,
+                    itemTypeId,
+                    (short)candidateSlot,
+                    InventoryRowsInserted: inserted,
+                    AlreadyPresent: false,
+                    Note: fallbackNote);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Unable to allocate inventory slot for player {playerId}.");
+    }
+
+    private static async Task<short?> TryGetBlueprintInventorySlotAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ulong playerId,
+        ulong itemTypeId,
+        ulong blueprintId,
+        CancellationToken cancellationToken)
+    {
+        const string duplicateSql = """
+            SELECT slot_number
+            FROM player_inventory
+            WHERE player_id = @playerId
+              AND item_type_id = @itemTypeId
+              AND item_id = @itemId
+            LIMIT 1;
+            """;
+        await using var duplicateCmd = new NpgsqlCommand(duplicateSql, connection, transaction);
+        duplicateCmd.Parameters.AddWithValue("playerId", (long)playerId);
+        duplicateCmd.Parameters.AddWithValue("itemTypeId", (long)itemTypeId);
+        duplicateCmd.Parameters.AddWithValue("itemId", (long)blueprintId);
+        object? scalar = await duplicateCmd.ExecuteScalarAsync(cancellationToken);
+        if (scalar is null || scalar == DBNull.Value)
+        {
+            return null;
+        }
+
+        return short.TryParse(
+            Convert.ToString(scalar, CultureInfo.InvariantCulture),
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out short existingSlot)
+            ? existingSlot
+            : null;
+    }
+
+    private static async Task<BlueprintGrantPayloadContext> LoadBlueprintGrantPayloadContextAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ulong blueprintId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT name, free_deploy, json_properties::text
+            FROM blueprint
+            WHERE id = @id
+            LIMIT 1;
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, connection, transaction);
+        cmd.Parameters.AddWithValue("id", (long)blueprintId);
+        await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            throw new InvalidOperationException($"Blueprint {blueprintId} does not exist.");
+        }
+
+        string blueprintName = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+        bool freeDeploy = !reader.IsDBNull(1) && reader.GetBoolean(1);
+        string? jsonPropertiesText = reader.IsDBNull(2) ? null : reader.GetString(2);
+
+        long size = 0L;
+        long kind = 4L; // NQ ConstructKind.DYNAMIC
+        if (!string.IsNullOrWhiteSpace(jsonPropertiesText))
+        {
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(jsonPropertiesText);
+                JsonElement root = document.RootElement;
+                ulong? parsedSize = TryReadUInt64(root, "size");
+                if (parsedSize.HasValue && parsedSize.Value <= long.MaxValue)
+                {
+                    size = (long)parsedSize.Value;
+                }
+
+                ulong? parsedKind = TryReadUInt64(root, "kind");
+                if (parsedKind.HasValue && parsedKind.Value <= long.MaxValue)
+                {
+                    kind = (long)parsedKind.Value;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return new BlueprintGrantPayloadContext(
+            Name: blueprintName,
+            FreeDeploy: freeDeploy,
+            Size: size,
+            Kind: kind);
+    }
+
+    private async Task<GameplayInventoryGrantAttemptResult> TryGrantBlueprintViaGameplayInventoryApiAsync(
+        DataConnectionOptions options,
+        ulong blueprintId,
+        ulong playerId,
+        ulong itemTypeId,
+        bool singleUse,
+        BlueprintGrantPayloadContext payloadContext,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<Uri> endpointCandidates = BuildGameplayInventoryGiveEndpointCandidates(options, playerId);
+        if (endpointCandidates.Count == 0)
+        {
+            return new GameplayInventoryGrantAttemptResult(
+                Succeeded: false,
+                Note: "No gameplay endpoint candidate available.");
+        }
+
+        byte[] payloadBytes = BuildGameplayInventoryGivePayload(
+            blueprintId,
+            itemTypeId,
+            singleUse,
+            payloadContext);
+
+        var failures = new List<string>();
+        foreach (Uri endpoint in endpointCandidates)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                {
+                    Version = HttpVersion.Version11,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+                    Content = new ByteArrayContent(payloadBytes)
+                };
+                request.Content.Headers.ContentType =
+                    new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+
+                using HttpResponseMessage response = await _httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseContentRead,
+                    cancellationToken);
+                byte[] responseBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return new GameplayInventoryGrantAttemptResult(
+                        Succeeded: true,
+                        Note: $"Granted via gameplay inventory endpoint '{endpoint}'.");
+                }
+
+                string responsePreview = BuildImportResponsePreview(
+                    responseBytes,
+                    response.Content.Headers.ContentType?.MediaType);
+                failures.Add(
+                    $"'{endpoint}' => HTTP {(int)response.StatusCode} {response.StatusCode}, body={BuildHttpBodyPreview(responsePreview)}");
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"'{endpoint}' => {BuildSingleLineExceptionPreview(ex)}");
+            }
+        }
+
+        return new GameplayInventoryGrantAttemptResult(
+            Succeeded: false,
+            Note: failures.Count == 0
+                ? "No gameplay endpoint call was attempted."
+                : string.Join(" | ", failures));
+    }
+
+    private static byte[] BuildGameplayInventoryGivePayload(
+        ulong blueprintId,
+        ulong itemTypeId,
+        bool singleUse,
+        BlueprintGrantPayloadContext context)
+    {
+        long maxUse = singleUse ? 1L : -1L;
+        bool isStatic = context.Kind != 4L; // NQ ConstructKind.DYNAMIC
+
+        static JsonObject PropertyNode(int type, JsonNode value) => new()
+        {
+            ["type"] = type,
+            ["value"] = value
+        };
+
+        var properties = new JsonArray
+        {
+            new JsonArray("name", PropertyNode(type: 4, JsonValue.Create(context.Name))),
+            new JsonArray("size", PropertyNode(type: 2, JsonValue.Create(context.Size))),
+            new JsonArray("static", PropertyNode(type: 1, JsonValue.Create(isStatic))),
+            new JsonArray("kind", PropertyNode(type: 2, JsonValue.Create(context.Kind))),
+            new JsonArray("maxUse", PropertyNode(type: 2, JsonValue.Create(maxUse))),
+            new JsonArray("freeDeploy", PropertyNode(type: 1, JsonValue.Create(context.FreeDeploy))),
+            new JsonArray("compacted", PropertyNode(type: 1, JsonValue.Create(false)))
+        };
+
+        var payload = new JsonObject
+        {
+            ["item"] = new JsonObject
+            {
+                ["type"] = itemTypeId,
+                ["id"] = blueprintId,
+                ["owner"] = new JsonObject
+                {
+                    ["playerId"] = 0,
+                    ["organizationId"] = 0
+                },
+                ["properties"] = properties
+            },
+            ["quantity"] = new JsonObject
+            {
+                ["value"] = 1
+            }
+        };
+
+        return Encoding.UTF8.GetBytes(payload.ToJsonString(new JsonSerializerOptions
+        {
+            WriteIndented = false
+        }));
+    }
+
+    private static IReadOnlyList<Uri> BuildGameplayInventoryGiveEndpointCandidates(
+        DataConnectionOptions options,
+        ulong playerId)
+    {
+        var result = new List<Uri>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        static void AddCandidate(
+            List<Uri> destinations,
+            HashSet<string> destinationSet,
+            Uri sourceUri,
+            ulong targetPlayerId)
+        {
+            var builder = new UriBuilder(sourceUri)
+            {
+                Path = $"/inventory/{targetPlayerId.ToString(CultureInfo.InvariantCulture)}/giveitems/",
+                Query = string.Empty
+            };
+            Uri candidate = builder.Uri;
+            if (destinationSet.Add(candidate.AbsoluteUri))
+            {
+                destinations.Add(candidate);
+            }
+        }
+
+        try
+        {
+            string? endpointTemplateFromEnv = Environment.GetEnvironmentVariable("MYDU_ENDPOINT_TEMPLATE");
+            string? blueprintImportEndpointFromEnv = Environment.GetEnvironmentVariable("MYDU_BLUEPRINT_IMPORT_ENDPOINT");
+            if (!string.IsNullOrWhiteSpace(endpointTemplateFromEnv) || !string.IsNullOrWhiteSpace(blueprintImportEndpointFromEnv))
+            {
+                string template = string.IsNullOrWhiteSpace(endpointTemplateFromEnv)
+                    ? "http://127.0.0.1:10111/constructs/{id}/info"
+                    : endpointTemplateFromEnv;
+                foreach (Uri candidate in BuildBlueprintImportEndpointCandidates(
+                             template,
+                             blueprintImportEndpointFromEnv,
+                             2UL,
+                             0UL))
+                {
+                    AddCandidate(result, seen, candidate, playerId);
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        var hosts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(options.Host))
+        {
+            hosts.Add(options.Host.Trim());
+        }
+
+        hosts.Add("127.0.0.1");
+        hosts.Add("localhost");
+        hosts.Add("::1");
+
+        int[] ports = { 10111, 12003 };
+        foreach (string hostCandidate in hosts)
+        {
+            string host = NormalizeEndpointHost(hostCandidate);
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                continue;
+            }
+
+            foreach (int port in ports)
+            {
+                var builder = new UriBuilder(Uri.UriSchemeHttp, host, port)
+                {
+                    Path = $"/inventory/{playerId.ToString(CultureInfo.InvariantCulture)}/giveitems/",
+                    Query = string.Empty
+                };
+                Uri candidate = builder.Uri;
+                if (seen.Add(candidate.AbsoluteUri))
+                {
+                    result.Add(candidate);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static string NormalizeEndpointHost(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        string trimmed = value.Trim();
+        if (trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri) && uri is not null
+                ? uri.Host
+                : string.Empty;
+        }
+
+        if (trimmed.StartsWith("[", StringComparison.Ordinal) && trimmed.EndsWith("]", StringComparison.Ordinal))
+        {
+            return trimmed[1..^1];
+        }
+
+        return trimmed;
+    }
+
+    private sealed record BlueprintGrantPayloadContext(
+        string Name,
+        bool FreeDeploy,
+        long Size,
+        long Kind);
+
+    private sealed record GameplayInventoryGrantAttemptResult(
+        bool Succeeded,
+        string Note);
+
     public async Task<string> ExportBlueprintJsonAsync(
         DataConnectionOptions options,
         ulong blueprintId,

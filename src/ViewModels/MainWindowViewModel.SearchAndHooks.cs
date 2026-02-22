@@ -541,6 +541,7 @@ public partial class MainWindowViewModel : ViewModelBase
     partial void OnPlayerIdInputChanged(string value)
     {
         OnPropertyChanged(nameof(SelectedPlayerIdDisplay));
+        OnPropertyChanged(nameof(CanGiveBlueprintToPlayer));
 
         if (!_isRestoringSettings && !_isStartupInitializing)
         {
@@ -701,6 +702,7 @@ public partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanEditBlueprintMaxUse));
         OnPropertyChanged(nameof(CanCopyBlueprint));
         OnPropertyChanged(nameof(CanDeleteBlueprint));
+        OnPropertyChanged(nameof(CanGiveBlueprintToPlayer));
         OnPropertyChanged(nameof(CanSaveBlueprint));
         OnPropertyChanged(nameof(BlueprintEditValidationMessage));
         OnPropertyChanged(nameof(HasBlueprintEditValidationError));
@@ -799,6 +801,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         OnPropertyChanged(nameof(SelectedPlayerIdDisplay));
         OnPropertyChanged(nameof(CanImportBlueprint));
+        OnPropertyChanged(nameof(CanGiveBlueprintToPlayer));
 
         if (!_isRestoringSettings && !_isStartupInitializing)
         {
@@ -830,6 +833,7 @@ public partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanEditBlueprintMaxUse));
         OnPropertyChanged(nameof(CanCopyBlueprint));
         OnPropertyChanged(nameof(CanImportBlueprint));
+        OnPropertyChanged(nameof(CanGiveBlueprintToPlayer));
         OnPropertyChanged(nameof(CanRepairDestroyedElements));
         OnPropertyChanged(nameof(CanDeleteBlueprint));
         OnPropertyChanged(nameof(CanSaveBlueprint));
@@ -865,6 +869,7 @@ public partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanEditBlueprintMaxUse));
         OnPropertyChanged(nameof(CanCopyBlueprint));
         OnPropertyChanged(nameof(CanDeleteBlueprint));
+        OnPropertyChanged(nameof(CanGiveBlueprintToPlayer));
         OnPropertyChanged(nameof(CanSaveBlueprint));
         OnPropertyChanged(nameof(BlueprintEditValidationMessage));
         OnPropertyChanged(nameof(HasBlueprintEditValidationError));

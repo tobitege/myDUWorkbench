@@ -459,14 +459,12 @@ public sealed partial class MyDuDataService
         await connection.OpenAsync(cancellationToken);
 
         const string sql = """
-            SELECT id,
-                   COALESCE(
-                       NULLIF(substring(yaml from E'displayName:\\s*([^\\n\\r]+)'), ''),
-                       NULLIF(name, ''),
-                       ''
-                   ) AS display_name
-            FROM item_definition
-            WHERE id = ANY(@ids);
+            SELECT
+                id::bigint AS id,
+                COALESCE(name, '') AS item_name,
+                COALESCE(yaml, '') AS item_yaml
+            FROM public.item_definition
+            WHERE id::bigint = ANY(@ids);
             """;
 
         await using var cmd = new NpgsqlCommand(sql, connection);
@@ -482,7 +480,9 @@ public sealed partial class MyDuDataService
                 continue;
             }
 
-            string displayName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1).Trim();
+            string itemName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            string itemYaml = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+            string displayName = ResolveItemDefinitionDisplayName(itemName, itemYaml);
             if (string.IsNullOrWhiteSpace(displayName))
             {
                 continue;
@@ -492,6 +492,43 @@ public sealed partial class MyDuDataService
         }
 
         return result;
+    }
+
+    private static string ResolveItemDefinitionDisplayName(string itemName, string itemYaml)
+    {
+        string yamlDisplayName = ExtractDisplayNameFromYaml(itemYaml);
+        if (!string.IsNullOrWhiteSpace(yamlDisplayName))
+        {
+            return yamlDisplayName.Trim();
+        }
+
+        return string.IsNullOrWhiteSpace(itemName) ? string.Empty : itemName.Trim();
+    }
+
+    private static string ExtractDisplayNameFromYaml(string yaml)
+    {
+        if (string.IsNullOrWhiteSpace(yaml))
+        {
+            return string.Empty;
+        }
+
+        string normalized = yaml
+            .Replace("\\r", "\n", StringComparison.Ordinal)
+            .Replace("\\n", "\n", StringComparison.Ordinal);
+
+        const string marker = "displayName:";
+        int markerIndex = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0)
+        {
+            return string.Empty;
+        }
+
+        string tail = normalized[(markerIndex + marker.Length)..].TrimStart();
+        int lineEndIndex = tail.IndexOfAny(new[] {'\r', '\n'});
+        string line = lineEndIndex >= 0 ? tail[..lineEndIndex] : tail;
+        line = line.Trim().Trim('\'', '"').Trim();
+
+        return line;
     }
 
     public async Task<IReadOnlyList<ElementTypeCountRecord>> GetBlueprintElementTypeCountsAsync(
