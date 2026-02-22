@@ -302,6 +302,25 @@ public partial class MainWindowViewModel : ViewModelBase
         return true;
     }
 
+    public bool TryGetStatusDetails(out string title, out string details)
+    {
+        if (TryGetBlueprintImportErrorDetails(out title, out details))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(LastStatusErrorDetails))
+        {
+            title = "Status Details";
+            details = LastStatusErrorDetails;
+            return true;
+        }
+
+        title = string.Empty;
+        details = string.Empty;
+        return false;
+    }
+
     public void SetBlueprintImportError(Exception ex)
     {
         LastBlueprintImportErrorDetails = ex?.ToString() ?? string.Empty;

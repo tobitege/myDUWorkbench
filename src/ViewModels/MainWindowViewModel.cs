@@ -226,6 +226,9 @@ public partial class MainWindowViewModel : ViewModelBase
     private string lastBlueprintImportErrorDetails = string.Empty;
 
     [ObservableProperty]
+    private string lastStatusErrorDetails = string.Empty;
+
+    [ObservableProperty]
     private string activeConstructName = string.Empty;
 
     [ObservableProperty]

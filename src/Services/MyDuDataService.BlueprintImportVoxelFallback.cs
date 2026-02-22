@@ -294,7 +294,7 @@ public sealed partial class MyDuDataService
             list.Add(builder.Uri);
         }
 
-        string primaryHost = gameplayImportEndpoint.Host;
+        string primaryHost = NormalizeLoopbackHost(gameplayImportEndpoint.Host);
         AddCandidate(candidates, gameplayImportEndpoint, primaryHost, blueprintId, clearExistingCells);
 
         if (string.Equals(primaryHost, "localhost", StringComparison.OrdinalIgnoreCase))
@@ -324,6 +324,24 @@ public sealed partial class MyDuDataService
         }
 
         return deduplicated;
+    }
+
+    private static string NormalizeLoopbackHost(string host)
+    {
+        string normalized = (host ?? string.Empty).Trim();
+        if (normalized.StartsWith("[", StringComparison.Ordinal) &&
+            normalized.EndsWith("]", StringComparison.Ordinal) &&
+            normalized.Length > 2)
+        {
+            normalized = normalized[1..^1];
+        }
+
+        if (string.Equals(normalized, "0:0:0:0:0:0:0:1", StringComparison.OrdinalIgnoreCase))
+        {
+            return "::1";
+        }
+
+        return normalized;
     }
 
     private static Uri BuildVoxelServiceDumpEndpoint(Uri voxelJsonImportEndpoint, ulong blueprintId)

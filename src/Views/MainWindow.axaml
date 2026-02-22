@@ -210,10 +210,24 @@
                                                     Width="90"
                                                     IsEnabled="{Binding CanRepairDestroyedElements}"
                                                     Click="OnRepairDestroyedElementsClick" />
-                                            <Button Content="Export Elements JSON"
-                                                    Width="180"
-                                                    IsEnabled="{Binding CanExportConstructBrowserElementSummary}"
-                                                    Click="OnExportConstructBrowserElementSummaryClick" />
+                                            <DropDownButton Content="Export to JSON"
+                                                            Width="140"
+                                                            IsEnabled="{Binding CanExportConstructBrowserElementSummary}">
+                                                <DropDownButton.Flyout>
+                                                    <MenuFlyout>
+                                                        <MenuItem Header="Elements"
+                                                                  Click="OnExportConstructBrowserElementSummaryClick" />
+                                                        <MenuItem Header="Voxels"
+                                                                  Click="OnExportConstructVoxelMaterialsJsonClick" />
+                                                        <MenuItem Header="Both"
+                                                                  Click="OnExportConstructBrowserBothJsonClick" />
+                                                    </MenuFlyout>
+                                                </DropDownButton.Flyout>
+                                            </DropDownButton>
+                                            <Button Content="Show Voxel Data"
+                                                    Width="140"
+                                                    IsEnabled="{Binding CanRepairDestroyedElements}"
+                                                    Click="OnShowConstructVoxelDataClick" />
                                         </StackPanel>
 
                                         <DataGrid Grid.Row="1"
@@ -379,10 +393,24 @@
                                                         Width="120"
                                                         IsEnabled="{Binding CanEditBlueprint}"
                                                         Click="OnExportBlueprintJsonClick" />
-                                                <Button Content="Export Elements JSON"
-                                                        Width="180"
-                                                        IsEnabled="{Binding CanExportBlueprintElementSummary}"
-                                                        Click="OnExportBlueprintElementSummaryClick" />
+                                                <DropDownButton Content="Export to JSON"
+                                                                Width="140"
+                                                                IsEnabled="{Binding CanExportBlueprintElementSummary}">
+                                                    <DropDownButton.Flyout>
+                                                        <MenuFlyout>
+                                                            <MenuItem Header="Elements"
+                                                                      Click="OnExportBlueprintElementSummaryClick" />
+                                                            <MenuItem Header="Voxels"
+                                                                      Click="OnExportBlueprintVoxelMaterialsJsonClick" />
+                                                            <MenuItem Header="Both"
+                                                                      Click="OnExportBlueprintBothJsonClick" />
+                                                        </MenuFlyout>
+                                                    </DropDownButton.Flyout>
+                                                </DropDownButton>
+                                                <Button Content="Show Voxel Data"
+                                                        Width="140"
+                                                        IsEnabled="{Binding CanEditBlueprint}"
+                                                        Click="OnShowBlueprintVoxelDataClick" />
                                                 <Button Content="Open in Construct Browser"
                                                         Width="210"
                                                         IsEnabled="{Binding CanEditBlueprint}"

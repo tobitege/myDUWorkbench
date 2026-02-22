@@ -100,6 +100,11 @@ public partial class MainWindow : Window
             OnElementPropertiesGridPointerPressed,
             RoutingStrategies.Bubble,
             handledEventsToo: true);
+        ElementPropertiesGrid.AddHandler(
+            InputElement.KeyDownEvent,
+            OnElementPropertiesGridKeyDown,
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
         Loaded += OnLoaded;
         Opened += OnOpened;
         Closing += OnClosing;

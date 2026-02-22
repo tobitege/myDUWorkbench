@@ -34,6 +34,7 @@ public partial class MainWindowViewModel : ViewModelBase
             damagedElementIds,
             cancellationToken: default,
             progress: null);
+        AppendVoxelIngredientRoot(typeRoots);
         ElementPropertiesModel.SetRoots(typeRoots);
         UpdateConstructBrowserEntryCounts(typeRoots);
     }
@@ -543,6 +544,8 @@ public partial class MainWindowViewModel : ViewModelBase
 
         _allRegularProperties.Clear();
         _allRegularProperties.AddRange(regularProperties);
+        _voxelIngredientRows.Clear();
+        _voxelIngredientScopeLabel = string.Empty;
         OnPropertyChanged(nameof(CanExportConstructBrowserElementSummary));
         RebuildPropertyFilterRows(regularProperties);
         if (buildFilteredView)
@@ -639,5 +642,53 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             progressUpdate?.Invoke(86d, "Import: preparing filters");
         }
+    }
+
+    private void AppendVoxelIngredientRoot(ICollection<PropertyTreeRow> roots)
+    {
+        if (_voxelIngredientRows.Count == 0)
+        {
+            return;
+        }
+
+        string scopeSuffix = string.IsNullOrWhiteSpace(_voxelIngredientScopeLabel)
+            ? string.Empty
+            : $" ({_voxelIngredientScopeLabel})";
+        var voxelRoot = new PropertyTreeRow(
+            "Voxels",
+            "Voxels",
+            null,
+            "Voxels",
+            string.Empty,
+            null,
+            null,
+            $"{_voxelIngredientRows.Count.ToString("N0", CultureInfo.CurrentCulture)} ingredients{scopeSuffix}",
+            string.Empty,
+            "Voxels");
+
+        foreach (VoxelIngredientGridRow ingredient in _voxelIngredientRows
+                     .OrderBy(static row => row.MaterialName, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(static row => row.MaterialId, StringComparer.OrdinalIgnoreCase))
+        {
+            string fullContent =
+                $"Material: {ingredient.MaterialName}{Environment.NewLine}" +
+                $"MaterialId: {ingredient.MaterialId}{Environment.NewLine}" +
+                $"Voxel blocks: {ingredient.VoxelBlocks.ToString("N0", CultureInfo.CurrentCulture)}{Environment.NewLine}" +
+                $"Volume liters: {ingredient.VolumeLiters.ToString("N2", CultureInfo.CurrentCulture)}";
+
+            voxelRoot.Children.Add(new PropertyTreeRow(
+                ingredient.MaterialName,
+                "Voxel Ingredient",
+                null,
+                "Voxels",
+                ingredient.MaterialId,
+                null,
+                null,
+                $"{ingredient.VoxelBlocks.ToString("N0", CultureInfo.CurrentCulture)} blocks | {ingredient.VolumeLiters.ToString("N2", CultureInfo.CurrentCulture)} L",
+                fullContent,
+                ingredient.MaterialName));
+        }
+
+        roots.Add(voxelRoot);
     }
 }

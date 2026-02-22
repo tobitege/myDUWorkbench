@@ -545,6 +545,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 progressUpdate?.Invoke(percent, text);
             });
 
+        AppendVoxelIngredientRoot(elementTreeRoots);
         ElementPropertiesModel.SetRoots(elementTreeRoots);
         UpdateConstructBrowserEntryCounts(elementTreeRoots);
         SelectedElementPropertyNode = FindNodeBySelectionKey(ElementPropertiesModel, _selectedElementNodeKey);

@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia;
@@ -28,6 +29,8 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -261,6 +264,113 @@ public partial class MainWindow : Window
                 ct));
     }
 
+    private async void OnExportConstructVoxelMaterialsJsonClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        await RunConstructVoxelDataAsync(vm, showDialog: true, applyToGrid: false);
+    }
+
+    private async void OnShowConstructVoxelDataClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        await RunConstructVoxelDataAsync(vm, showDialog: false, applyToGrid: true);
+    }
+
+    private async Task RunConstructVoxelDataAsync(MainWindowViewModel vm, bool showDialog, bool applyToGrid)
+    {
+        if (!vm.CanRepairDestroyedElements)
+        {
+            vm.StatusMessage = "No loaded DB construct snapshot available for voxel material summary.";
+            return;
+        }
+
+        await RunElementSummaryExportAsync(
+            vm,
+            "Export: analyzing construct voxel materials",
+            showDialog ? "Construct voxel material summary ready." : "Construct voxel data loaded.",
+            static (targetVm, message) => targetVm.StatusMessage = message,
+            "Construct voxel material summary export failed",
+            "Construct Voxel Materials JSON",
+            ct => vm.ExportLoadedConstructVoxelMaterialSummaryJsonAsync(ct),
+            timeoutSeconds: 90,
+            onExportJsonReady: applyToGrid
+                ? static (targetVm, json) => targetVm.ApplyVoxelMaterialSummaryToGrid(json)
+                : null,
+            showDialog: showDialog,
+            refreshConstructBrowserGrid: applyToGrid);
+    }
+
+    private async void OnExportConstructBrowserBothJsonClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanExportConstructBrowserElementSummary)
+        {
+            vm.StatusMessage = "No Construct Browser element data loaded.";
+            return;
+        }
+
+        if (!vm.CanRepairDestroyedElements)
+        {
+            vm.StatusMessage = "No loaded DB construct snapshot available for voxel material summary.";
+            return;
+        }
+
+        IReadOnlyList<ulong> selectedElementIds = GetSelectedElementIdsFromConstructBrowserGrid();
+        var optionsDialog = new ElementTypeSummaryExportDialog("Construct Browser Elements JSON", selectedElementIds.Count);
+        bool confirmed = await optionsDialog.ShowDialog<bool>(this);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        IReadOnlyCollection<ulong>? exportElementIds = optionsDialog.UseSelectedRowsOnly
+            ? selectedElementIds
+            : null;
+
+        string voxelJson = string.Empty;
+        await RunElementSummaryExportAsync(
+            vm,
+            "Export: preparing construct elements + voxels",
+            "Construct elements + voxel summary export ready.",
+            static (targetVm, message) => targetVm.StatusMessage = message,
+            "Construct elements + voxel summary export failed",
+            "Construct Elements + Voxels JSON",
+            async ct =>
+            {
+                string elementsJson = await vm.ExportLoadedElementTypeCountsJsonAsync(
+                    optionsDialog.UseDisplayNameField,
+                    exportElementIds,
+                    ct);
+                voxelJson = await vm.ExportLoadedConstructVoxelMaterialSummaryJsonAsync(ct);
+                return BuildCombinedExportJson(elementsJson, voxelJson);
+            },
+            timeoutSeconds: 120,
+            onExportJsonReady: null,
+            showDialog: true,
+            refreshConstructBrowserGrid: false);
+    }
+
     private async void OnExportBlueprintElementSummaryClick(object? sender, RoutedEventArgs e)
     {
         _ = sender;
@@ -307,6 +417,120 @@ public partial class MainWindow : Window
                 exportBlueprintIds,
                 optionsDialog.UseDisplayNameField,
                 ct));
+    }
+
+    private async void OnExportBlueprintVoxelMaterialsJsonClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        await RunBlueprintVoxelDataAsync(vm, showDialog: true, applyToGrid: false);
+    }
+
+    private async void OnShowBlueprintVoxelDataClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        await RunBlueprintVoxelDataAsync(vm, showDialog: false, applyToGrid: true);
+    }
+
+    private async Task RunBlueprintVoxelDataAsync(MainWindowViewModel vm, bool showDialog, bool applyToGrid)
+    {
+        if (!vm.CanEditBlueprint || vm.SelectedBlueprint is null)
+        {
+            vm.BlueprintsStatus = "No blueprint selected or database offline.";
+            return;
+        }
+
+        await RunElementSummaryExportAsync(
+            vm,
+            "Export: analyzing blueprint voxel materials",
+            showDialog ? "Blueprint voxel material summary ready." : "Blueprint voxel data loaded.",
+            static (targetVm, message) => targetVm.BlueprintsStatus = message,
+            "Blueprint voxel material summary export failed",
+            "Blueprint Voxel Materials JSON",
+            ct => vm.ExportSelectedBlueprintVoxelMaterialSummaryJsonAsync(ct),
+            timeoutSeconds: 90,
+            onExportJsonReady: applyToGrid
+                ? static (targetVm, json) => targetVm.ApplyVoxelMaterialSummaryToGrid(json)
+                : null,
+            showDialog: showDialog,
+            refreshConstructBrowserGrid: applyToGrid);
+    }
+
+    private async void OnExportBlueprintBothJsonClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        if (!vm.CanExportBlueprintElementSummary)
+        {
+            vm.BlueprintsStatus = "No loaded blueprint data available for export.";
+            return;
+        }
+
+        if (!vm.CanEditBlueprint || vm.SelectedBlueprint is null)
+        {
+            vm.BlueprintsStatus = "No blueprint selected or database offline.";
+            return;
+        }
+
+        ulong[] allBlueprintIds = GetAllLoadedBlueprintIds(vm);
+        if (allBlueprintIds.Length == 0)
+        {
+            vm.BlueprintsStatus = "No blueprint rows available for export.";
+            return;
+        }
+
+        IReadOnlyList<ulong> selectedBlueprintIds = GetSelectedBlueprintIds(vm.SelectedBlueprint);
+        var optionsDialog = new ElementTypeSummaryExportDialog("Blueprint Elements JSON", selectedBlueprintIds.Count);
+        bool confirmed = await optionsDialog.ShowDialog<bool>(this);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        IReadOnlyCollection<ulong> exportBlueprintIds = optionsDialog.UseSelectedRowsOnly
+            ? selectedBlueprintIds
+            : allBlueprintIds;
+
+        string voxelJson = string.Empty;
+        await RunElementSummaryExportAsync(
+            vm,
+            "Export: preparing blueprint elements + voxels",
+            "Blueprint elements + voxel summary export ready.",
+            static (targetVm, message) => targetVm.BlueprintsStatus = message,
+            "Blueprint elements + voxel summary export failed",
+            "Blueprint Elements + Voxels JSON",
+            async ct =>
+            {
+                string elementsJson = await vm.ExportBlueprintElementTypeCountsJsonAsync(
+                    exportBlueprintIds,
+                    optionsDialog.UseDisplayNameField,
+                    ct);
+                voxelJson = await vm.ExportSelectedBlueprintVoxelMaterialSummaryJsonAsync(ct);
+                return BuildCombinedExportJson(elementsJson, voxelJson);
+            },
+            timeoutSeconds: 120,
+            onExportJsonReady: null,
+            showDialog: true,
+            refreshConstructBrowserGrid: false);
     }
 
     private async void OnOpenBlueprintInConstructBrowserClick(object? sender, RoutedEventArgs e)
@@ -378,6 +602,50 @@ public partial class MainWindow : Window
 
             vm.TrySelectElementCodeBlockTab(elementId);
         }, DispatcherPriority.Background);
+    }
+
+    private async void OnElementPropertiesGridKeyDown(object? sender, KeyEventArgs e)
+    {
+        _ = sender;
+
+        if (DataContext is not MainWindowViewModel vm ||
+            e.Key != Key.C ||
+            !e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            return;
+        }
+
+        if (!TryResolvePropertyTreeRow(ElementPropertiesGrid.SelectedItem, out PropertyTreeRow? row) ||
+            row is null)
+        {
+            return;
+        }
+
+        string copyText = !string.IsNullOrWhiteSpace(row.ValuePreview)
+            ? row.ValuePreview
+            : row.FullContent;
+        if (string.IsNullOrWhiteSpace(copyText))
+        {
+            return;
+        }
+
+        IClipboard? clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+        {
+            vm.StatusMessage = "Clipboard unavailable.";
+            return;
+        }
+
+        try
+        {
+            await ClipboardExtensions.SetTextAsync(clipboard, copyText);
+            vm.StatusMessage = "Construct Browser preview copied to clipboard.";
+            e.Handled = true;
+        }
+        catch (Exception ex)
+        {
+            vm.StatusMessage = $"Copy failed: {ex.Message}";
+        }
     }
 
     private async void OnExpandAllLuaBlocksClick(object? sender, RoutedEventArgs e)
@@ -596,7 +864,7 @@ public partial class MainWindow : Window
         }
 
         if (DataContext is not MainWindowViewModel vm ||
-            !vm.TryGetBlueprintImportErrorDetails(out string title, out string details))
+            !vm.TryGetStatusDetails(out string title, out string details))
         {
             return;
         }
@@ -771,6 +1039,50 @@ public partial class MainWindow : Window
             .ToArray();
     }
 
+    private static string BuildCombinedExportJson(string elementsJson, string voxelsJson)
+    {
+        var root = new JsonObject
+        {
+            ["elements"] = ParseJsonNodeOrString(elementsJson),
+            ["voxels"] = ParseJsonNodeOrString(voxelsJson)
+        };
+
+        var jsonOptions = new JsonSerializerOptions
+        {
+            WriteIndented = true
+        };
+        return root.ToJsonString(jsonOptions);
+    }
+
+    private static JsonNode ParseJsonNodeOrString(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return JsonValue.Create(string.Empty)!;
+        }
+
+        try
+        {
+            return JsonNode.Parse(json) ?? JsonValue.Create(json)!;
+        }
+        catch
+        {
+            return JsonValue.Create(json)!;
+        }
+    }
+
+    private async Task RefreshConstructBrowserGridAsync()
+    {
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            ElementPropertiesGrid.InvalidateMeasure();
+            ElementPropertiesGrid.InvalidateArrange();
+            ElementPropertiesGrid.InvalidateVisual();
+        }, DispatcherPriority.Background);
+
+        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Render);
+    }
+
     private async Task RunElementSummaryExportAsync(
         MainWindowViewModel vm,
         string prepareProgressText,
@@ -778,26 +1090,41 @@ public partial class MainWindow : Window
         Action<MainWindowViewModel, string> setStatus,
         string failureStatusPrefix,
         string dialogTitle,
-        Func<CancellationToken, Task<string>> exportFactory)
+        Func<CancellationToken, Task<string>> exportFactory,
+        int timeoutSeconds = 30,
+        Action<MainWindowViewModel, string>? onExportJsonReady = null,
+        bool showDialog = true,
+        bool refreshConstructBrowserGrid = false)
     {
         try
         {
+            vm.LastStatusErrorDetails = string.Empty;
             BeginExportProgress(vm, prepareProgressText, 10d);
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             SetExportProgress(vm, "Export: aggregating element counts", 40d);
             string json = await exportFactory(cts.Token);
+            onExportJsonReady?.Invoke(vm, json);
+            if (refreshConstructBrowserGrid)
+            {
+                await RefreshConstructBrowserGridAsync();
+            }
             SetExportProgress(vm, "Export: formatting result", 85d);
 
             setStatus(vm, successStatusText);
+            vm.LastStatusErrorDetails = string.Empty;
             SetExportProgress(vm, "Export: ready", 100d);
-            var dialog = new ExportJsonDialog(json)
+            if (showDialog)
             {
-                Title = dialogTitle
-            };
-            await dialog.ShowDialog(this);
+                var dialog = new ExportJsonDialog(json)
+                {
+                    Title = dialogTitle
+                };
+                await dialog.ShowDialog(this);
+            }
         }
         catch (Exception ex)
         {
+            vm.LastStatusErrorDetails = ex.ToString();
             setStatus(vm, $"{failureStatusPrefix}: {ex.Message}");
         }
         finally
