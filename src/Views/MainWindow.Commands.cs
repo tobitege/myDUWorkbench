@@ -102,31 +102,57 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!vm.CanDeleteBlueprint || vm.SelectedBlueprint is not { } bp)
+        IReadOnlyList<BlueprintDbRecord> selectedBlueprints = GetSelectedBlueprintRows(vm.SelectedBlueprint);
+        if (!vm.CanDeleteBlueprint || selectedBlueprints.Count == 0)
         {
             vm.BlueprintsStatus = "No blueprint selected or database offline.";
             return;
         }
 
+        BlueprintDbRecord primaryBlueprint = selectedBlueprints[0];
+        string prompt = selectedBlueprints.Count == 1
+            ? $"Delete blueprint '{primaryBlueprint.Name}' (ID {primaryBlueprint.Id}, {primaryBlueprint.ElementCount} element(s))?"
+            : $"Delete {selectedBlueprints.Count.ToString(CultureInfo.InvariantCulture)} selected blueprints?";
+        string? details = selectedBlueprints.Count <= 1
+            ? null
+            : BuildBlueprintDeleteDetails(selectedBlueprints);
+
         var dialog = new ConfirmationDialog(
-            "Delete Blueprint",
-            $"Delete blueprint '{bp.Name}' (ID {bp.Id}, {bp.ElementCount} element(s))?",
+            selectedBlueprints.Count == 1 ? "Delete Blueprint" : "Delete Blueprints",
+            prompt,
             "Delete",
-            "Cancel");
+            "Cancel",
+            detailsText: details);
         bool confirmed = await dialog.ShowDialog<bool>(this);
         if (!confirmed)
         {
             return;
         }
 
+        using var cts = new CancellationTokenSource();
+        var progressDialog = new BlueprintDeleteProgressDialog(selectedBlueprints.Count);
+        progressDialog.CancelRequested += (_, _) => cts.Cancel();
+        Task progressDialogTask = progressDialog.ShowDialog(this);
+
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            await vm.DeleteBlueprintAsync(cts.Token);
+            var progress = new Progress<BlueprintDeleteProgress>(progressDialog.UpdateProgress);
+            await vm.DeleteBlueprintsAsync(selectedBlueprints, progress, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
-            vm.BlueprintsStatus = $"Delete failed: {ex.Message}";
+            if (string.IsNullOrWhiteSpace(vm.BlueprintsStatus))
+            {
+                vm.BlueprintsStatus = $"Delete failed: {ex.Message}";
+            }
+        }
+        finally
+        {
+            progressDialog.CloseDialog();
+            await progressDialogTask;
         }
     }
 
@@ -1406,6 +1432,50 @@ public partial class MainWindow : Window
         }
 
         return selectedIds.OrderBy(static id => id).ToArray();
+    }
+
+    private IReadOnlyList<BlueprintDbRecord> GetSelectedBlueprintRows(BlueprintDbRecord? fallback)
+    {
+        var rows = new List<BlueprintDbRecord>();
+        var selectedIds = new HashSet<ulong>();
+        foreach (object? selected in EnumerateGridSelectedItems(BlueprintsGrid))
+        {
+            if (selected is not BlueprintDbRecord row || row.Id == 0UL || !selectedIds.Add(row.Id))
+            {
+                continue;
+            }
+
+            rows.Add(row);
+        }
+
+        if (rows.Count == 0 && fallback is not null && fallback.Id > 0UL && selectedIds.Add(fallback.Id))
+        {
+            rows.Add(fallback);
+        }
+
+        return rows;
+    }
+
+    private static string BuildBlueprintDeleteDetails(IReadOnlyList<BlueprintDbRecord> blueprints)
+    {
+        const int maxPreviewCount = 8;
+
+        IEnumerable<string> previewLines = blueprints
+            .Take(maxPreviewCount)
+            .Select(bp =>
+            {
+                string blueprintName = string.IsNullOrWhiteSpace(bp.Name) ? "(unnamed)" : bp.Name.Trim();
+                return $"ID {bp.Id.ToString(CultureInfo.InvariantCulture)} | {blueprintName}";
+            });
+
+        string details = string.Join(Environment.NewLine, previewLines);
+        if (blueprints.Count > maxPreviewCount)
+        {
+            details += Environment.NewLine +
+                       $"+ {blueprints.Count - maxPreviewCount} more selected blueprint(s)";
+        }
+
+        return details;
     }
 
     private static IEnumerable<object?> EnumerateGridSelectedItems(DataGrid grid)

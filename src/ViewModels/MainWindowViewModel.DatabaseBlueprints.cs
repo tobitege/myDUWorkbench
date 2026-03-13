@@ -108,54 +108,114 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    public async Task DeleteBlueprintAsync(CancellationToken cancellationToken)
+    public Task DeleteBlueprintAsync(CancellationToken cancellationToken)
     {
         if (SelectedBlueprint is not { } bp)
+        {
+            return Task.CompletedTask;
+        }
+
+        return DeleteBlueprintsAsync(new[] { bp }, progress: null, cancellationToken);
+    }
+
+    public async Task DeleteBlueprintsAsync(
+        IReadOnlyList<BlueprintDbRecord> blueprints,
+        IProgress<BlueprintDeleteProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (blueprints.Count == 0)
         {
             return;
         }
 
+        int totalCount = blueprints.Count;
+        int deletedCount = 0;
+        int deletedBlueprintRows = 0;
+        int deletedElementRows = 0;
+        int deletedElementPropertyRows = 0;
+        int voxelCleanupWarningCount = 0;
+
         try
         {
             IsBusy = true;
-            BlueprintsStatus = $"Deleting blueprint {bp.Id}...";
             DataConnectionOptions options = BuildDbOptions();
-            BlueprintDeleteResult result = await _dataService.DeleteBlueprintAsync(
-                options,
-                bp.Id,
-                EndpointTemplateInput,
-                BlueprintImportEndpointInput,
-                cancellationToken);
 
-            if (result.BlueprintRowsDeleted <= 0)
+            for (int index = 0; index < blueprints.Count; index++)
             {
-                BlueprintsStatus = $"Blueprint {bp.Id} not found (already deleted?).";
-                return;
+                cancellationToken.ThrowIfCancellationRequested();
+
+                BlueprintDbRecord bp = blueprints[index];
+                string blueprintName = string.IsNullOrWhiteSpace(bp.Name) ? "(unnamed)" : bp.Name.Trim();
+
+                progress?.Report(new BlueprintDeleteProgress(index + 1, totalCount, bp.Id, blueprintName));
+                BlueprintsStatus =
+                    $"Deleting blueprint {index + 1}/{totalCount}: {bp.Id.ToString(CultureInfo.InvariantCulture)} | {blueprintName}";
+
+                BlueprintDeleteResult result = await _dataService.DeleteBlueprintAsync(
+                    options,
+                    bp.Id,
+                    EndpointTemplateInput,
+                    BlueprintImportEndpointInput,
+                    cancellationToken);
+
+                if (result.BlueprintRowsDeleted <= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Blueprint {bp.Id.ToString(CultureInfo.InvariantCulture)} ({blueprintName}) not found (already deleted?).");
+                }
+
+                deletedCount++;
+                deletedBlueprintRows += result.BlueprintRowsDeleted;
+                deletedElementRows += result.ElementRowsDeleted;
+                deletedElementPropertyRows += result.ElementPropertyRowsDeleted;
+
+                RemoveBlueprintById(bp.Id);
+
+                if (result.VoxelCleanupAttempted && !result.VoxelCleanupSucceeded)
+                {
+                    voxelCleanupWarningCount++;
+                }
             }
 
-            Blueprints.Remove(bp);
             SelectedBlueprint = null;
 
-            string voxelSuffix = string.Empty;
-            if (result.VoxelCleanupAttempted)
-            {
-                voxelSuffix = result.VoxelCleanupSucceeded
-                    ? " Voxel cleanup: ok."
-                    : $" Voxel cleanup warning: {result.VoxelCleanupNote}";
-            }
-
+            string voxelSuffix = voxelCleanupWarningCount > 0
+                ? $" Voxel cleanup warnings: {voxelCleanupWarningCount.ToString(CultureInfo.InvariantCulture)}."
+                : string.Empty;
             BlueprintsStatus =
-                $"Blueprint {bp.Id} deleted (rows: blueprint={result.BlueprintRowsDeleted}, element={result.ElementRowsDeleted}, element_property={result.ElementPropertyRowsDeleted}).{voxelSuffix}";
+                $"Deleted {deletedCount.ToString(CultureInfo.InvariantCulture)}/{totalCount.ToString(CultureInfo.InvariantCulture)} blueprint(s) " +
+                $"(rows: blueprint={deletedBlueprintRows.ToString(CultureInfo.InvariantCulture)}, " +
+                $"element={deletedElementRows.ToString(CultureInfo.InvariantCulture)}, " +
+                $"element_property={deletedElementPropertyRows.ToString(CultureInfo.InvariantCulture)}).{voxelSuffix}";
+        }
+        catch (OperationCanceledException)
+        {
+            BlueprintsStatus = deletedCount > 0
+                ? $"Delete cancelled after {deletedCount.ToString(CultureInfo.InvariantCulture)}/{totalCount.ToString(CultureInfo.InvariantCulture)} blueprint(s)."
+                : "Delete cancelled.";
+            throw;
         }
         catch (Exception ex)
         {
-            BlueprintsStatus = $"Delete failed: {ex.Message}";
+            BlueprintsStatus = deletedCount > 0
+                ? $"Delete failed after {deletedCount.ToString(CultureInfo.InvariantCulture)}/{totalCount.ToString(CultureInfo.InvariantCulture)} blueprint(s): {ex.Message}"
+                : $"Delete failed: {ex.Message}";
+            throw;
         }
         finally
         {
             IsBusy = false;
             OnPropertyChanged(nameof(CanDeleteBlueprint));
             OnPropertyChanged(nameof(CanSaveBlueprint));
+        }
+    }
+
+    private void RemoveBlueprintById(ulong blueprintId)
+    {
+        BlueprintDbRecord? existing = Blueprints.FirstOrDefault(row => row.Id == blueprintId);
+        if (existing is not null)
+        {
+            Blueprints.Remove(existing);
         }
     }
 

@@ -238,6 +238,12 @@ public sealed record BlueprintDeleteResult(
     bool VoxelCleanupSucceeded,
     string VoxelCleanupNote);
 
+public sealed record BlueprintDeleteProgress(
+    int CurrentIndex,
+    int TotalCount,
+    ulong BlueprintId,
+    string BlueprintName);
+
 public sealed record BlueprintUpdateResult(
     ulong BlueprintId,
     int RowsUpdated);

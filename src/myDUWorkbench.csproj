@@ -28,7 +28,7 @@
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="ProDataGrid" Version="11.3.11-preview.15" />
+    <PackageReference Include="ProDataGrid" Version="11.3.11-preview.20" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.1" />
     <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageReference Include="Npgsql" Version="10.0.1" />

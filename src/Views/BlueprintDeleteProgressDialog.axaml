@@ -1,0 +1,55 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="myDUWorkbench.Views.BlueprintDeleteProgressDialog"
+        Width="560"
+        MinWidth="520"
+        Height="240"
+        MinHeight="220"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    <Grid Margin="14"
+          RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+          RowSpacing="10">
+        <TextBlock Grid.Row="0"
+                   FontWeight="SemiBold"
+                   Text="Deleting blueprints..." />
+
+        <TextBlock Grid.Row="1"
+                   x:Name="CountText"
+                   Text="0/0" />
+
+        <Border Grid.Row="2"
+                BorderThickness="1"
+                BorderBrush="#505050"
+                CornerRadius="4"
+                Padding="8">
+            <StackPanel Spacing="4">
+                <TextBlock Foreground="#A0A0A0"
+                           Text="Current blueprint" />
+                <TextBlock x:Name="CurrentBlueprintText"
+                           TextWrapping="Wrap"
+                           Text="-" />
+            </StackPanel>
+        </Border>
+
+        <ProgressBar Grid.Row="3"
+                     x:Name="DeleteProgressBar"
+                     Height="16"
+                     Minimum="0"
+                     Maximum="100"
+                     Value="0" />
+
+        <StackPanel Grid.Row="4"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8">
+            <TextBlock x:Name="StatusText"
+                       VerticalAlignment="Center"
+                       Foreground="#A0A0A0"
+                       Text="Deleting..." />
+            <Button x:Name="CancelButton"
+                    Content="Cancel"
+                    Click="OnCancelClick" />
+        </StackPanel>
+    </Grid>
+</Window>
