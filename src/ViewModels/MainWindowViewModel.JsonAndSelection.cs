@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Avalonia.Controls.DataGridHierarchical;
 using Avalonia.Media;
+using myDUWorkbench.Helpers;
 using myDUWorkbench.Models;
 using myDUWorkbench.Services;
 using System;
@@ -514,11 +515,6 @@ public partial class MainWindowViewModel : ViewModelBase
         return TryBuildSelectedBlobSaveRequest(SelectedContent2Node, ".lua", IsMainBlobNode, out request);
     }
 
-    public bool TryGetSelectedDatabankBlobSaveRequest(out BlobSaveRequest? request)
-    {
-        return TryBuildSelectedBlobSaveRequest(SelectedDatabankNode, ".json", IsMainBlobNode, out request);
-    }
-
     public bool TrySelectElementCodeBlockTab(ulong elementId)
     {
         if (elementId == 0UL)
@@ -614,16 +610,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private static string SanitizeFileName(string value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return "blob";
-        }
-
-        string invalid = Regex.Escape(new string(System.IO.Path.GetInvalidFileNameChars()));
-        string sanitized = Regex.Replace(value, $"[{invalid}]+", "_");
-        sanitized = Regex.Replace(sanitized, "\\s+", "_");
-        sanitized = sanitized.Trim('_');
-        return string.IsNullOrWhiteSpace(sanitized) ? "blob" : sanitized;
+        return FileNameHelper.SanitizeGeneratedFileName(value, "blob");
     }
 
     private static object ResolveTreeSelectionTarget(

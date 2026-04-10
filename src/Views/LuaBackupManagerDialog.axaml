@@ -8,7 +8,7 @@
         MinHeight="640"
         WindowStartupLocation="CenterOwner">
     <Grid Margin="12"
-          RowDefinitions="Auto,3*,2*,Auto"
+          RowDefinitions="Auto,3*,Auto,2*,2*,Auto"
           RowSpacing="10">
         <Grid Grid.Row="0"
               ColumnDefinitions="*,Auto,Auto,Auto"
@@ -70,13 +70,24 @@
             </DataGrid.Columns>
         </DataGrid>
 
-        <Grid Grid.Row="2"
+        <Border Grid.Row="2"
+                Padding="10"
+                BorderBrush="#3A3A3A"
+                BorderThickness="1"
+                CornerRadius="4">
+            <TextBlock x:Name="ComparisonSummaryText"
+                       Text="Select a backup to compare."
+                       TextWrapping="Wrap" />
+        </Border>
+
+        <Grid Grid.Row="3"
               ColumnDefinitions="*,*"
               ColumnSpacing="10">
             <Grid Grid.Column="0"
                   RowDefinitions="Auto,*"
                   RowSpacing="6">
                 <TextBlock Grid.Row="0"
+                           x:Name="CurrentContentHeaderText"
                            FontWeight="SemiBold"
                            Text="Current editor content" />
                 <TextBox Grid.Row="1"
@@ -92,6 +103,7 @@
                   RowDefinitions="Auto,*"
                   RowSpacing="6">
                 <TextBlock Grid.Row="0"
+                           x:Name="SelectedBackupHeaderText"
                            FontWeight="SemiBold"
                            Text="Selected backup content" />
                 <TextBox Grid.Row="1"
@@ -105,7 +117,24 @@
             </Grid>
         </Grid>
 
-        <StackPanel Grid.Row="3"
+        <Grid Grid.Row="4"
+              RowDefinitions="Auto,*"
+              RowSpacing="6">
+            <TextBlock Grid.Row="0"
+                       x:Name="ComparisonHeaderText"
+                       FontWeight="SemiBold"
+                       Text="Line comparison" />
+            <TextBox Grid.Row="1"
+                     x:Name="ComparisonDiffTextBox"
+                     IsReadOnly="True"
+                     AcceptsReturn="True"
+                     TextWrapping="NoWrap"
+                     FontFamily="Consolas"
+                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto" />
+        </Grid>
+
+        <StackPanel Grid.Row="5"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Spacing="8">

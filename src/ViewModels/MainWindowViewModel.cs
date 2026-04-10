@@ -306,7 +306,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public TextWrapping ContentTextWrapping => AutoWrapContent ? TextWrapping.Wrap : TextWrapping.NoWrap;
     public bool CanSaveSelectedLuaBlob => IsLuaSaveNode(ResolveSelectedTreeRow(SelectedDpuyaml6Node));
     public bool CanSaveSelectedHtmlRsBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedContent2Node));
-    public bool CanSaveSelectedDatabankBlob => IsMainBlobNode(ResolveSelectedTreeRow(SelectedDatabankNode));
+    public bool CanSaveSelectedDatabankBlob => !string.IsNullOrWhiteSpace(SelectedDatabankContent);
     public bool CanRepairDestroyedElements => !IsBusy && !RepairInProgress && _lastSnapshot is not null && IsDatabaseOnline();
     public bool CanUseDamagedFilter => _lastSnapshot is not null;
     public bool CanEditBlueprint => SelectedBlueprint is not null && !IsBusy && IsDatabaseOnline();

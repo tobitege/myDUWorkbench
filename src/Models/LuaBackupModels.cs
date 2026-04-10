@@ -6,6 +6,12 @@ namespace myDUWorkbench.Models;
 
 using System;
 
+public enum BackupContentKind
+{
+    Lua = 0,
+    Databank = 1
+}
+
 public sealed record LuaBackupCreateRequest(
     string Content,
     string SuggestedFileName,
@@ -13,7 +19,8 @@ public sealed record LuaBackupCreateRequest(
     ulong? ElementId,
     string ElementDisplayName,
     string NodeLabel,
-    string PropertyName);
+    string PropertyName,
+    BackupContentKind ContentKind = BackupContentKind.Lua);
 
 public sealed record LuaBackupEntry(
     string FilePath,
@@ -25,9 +32,19 @@ public sealed record LuaBackupEntry(
     string PropertyName,
     string SourceFilePath,
     string SuggestedFileName,
-    string Preview);
+    string Preview,
+    BackupContentKind ContentKind = BackupContentKind.Lua);
 
 public sealed record LuaBackupDocument(
     LuaBackupEntry Entry,
     string RawFileContent,
     string ScriptContent);
+
+public sealed record BackupManagerDialogResult(
+    string Content,
+    BackupContentKind ContentKind,
+    ulong? ElementId,
+    string ElementDisplayName,
+    string NodeLabel,
+    string PropertyName,
+    string SuggestedFileName);

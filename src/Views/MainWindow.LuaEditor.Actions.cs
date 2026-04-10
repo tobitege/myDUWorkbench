@@ -278,7 +278,8 @@ public partial class MainWindow : Window
             }
             catch (Exception backupEx)
             {
-                vm.StatusMessage = $"Backup creation failed before DB save: {backupEx.Message}";
+                vm.StatusMessage = $"Save to DB blocked: backup creation failed: {backupEx.Message}";
+                return;
             }
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -327,8 +328,8 @@ public partial class MainWindow : Window
         try
         {
             string currentContent = GetLuaEditorPersistedText();
-            var dialog = new LuaBackupManagerDialog(_luaBackupService, currentContent);
-            LuaBackupManagerDialogResult? result = await dialog.ShowDialog<LuaBackupManagerDialogResult?>(this);
+            var dialog = new LuaBackupManagerDialog(_luaBackupService, currentContent, LuaBackupManagerDialog.CreateLuaOptions());
+            BackupManagerDialogResult? result = await dialog.ShowDialog<BackupManagerDialogResult?>(this);
             if (result is null)
             {
                 return;
@@ -352,9 +353,9 @@ public partial class MainWindow : Window
                 _luaEditorSuggestedFileName);
             _luaEditorOriginalDbRecord = null;
             DisableStructuredLuaEditor();
-            if (!TryEnableStructuredLuaEditor(result.ScriptContent, result.NodeLabel))
+            if (!TryEnableStructuredLuaEditor(result.Content, result.NodeLabel))
             {
-                SetLuaEditorText(result.ScriptContent);
+                SetLuaEditorText(result.Content);
             }
             MarkLuaEditorCleanFromCurrentContent();
             UpdateLuaEditorHeader();

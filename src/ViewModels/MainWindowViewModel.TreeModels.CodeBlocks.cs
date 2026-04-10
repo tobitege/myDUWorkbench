@@ -24,6 +24,7 @@ public partial class MainWindowViewModel : ViewModelBase
 {
     private static PropertyTreeRow BuildCodeBlockTreeRoot(
         IReadOnlyList<ElementPropertyRecord> records,
+        IReadOnlyDictionary<ulong, string>? preferredNamesByElementId,
         Func<ElementPropertyRecord, IReadOnlyList<PropertyTreeRow>> partBuilder,
         string rootLabel)
     {
@@ -32,10 +33,16 @@ public partial class MainWindowViewModel : ViewModelBase
                      .OrderBy(r => r.ElementId)
                      .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
         {
-            string blockLabel = string.IsNullOrWhiteSpace(record.ElementDisplayName)
-                ? $"Element {record.ElementId.ToString(CultureInfo.InvariantCulture)}"
-                : record.ElementDisplayName;
-            var blockNode = CreatePropertyLeaf(record, blockLabel, "Block");
+            string preferredElementName = ResolveElementName(record.ElementId, preferredNamesByElementId);
+            string blockLabel = BuildElementNodeLabel(record.ElementDisplayName, preferredElementName);
+            if (string.IsNullOrWhiteSpace(blockLabel))
+            {
+                blockLabel = string.IsNullOrWhiteSpace(record.ElementDisplayName)
+                    ? $"Element {record.ElementId.ToString(CultureInfo.InvariantCulture)}"
+                    : record.ElementDisplayName;
+            }
+
+            var blockNode = CreatePropertyLeaf(record, blockLabel, "Block", preferredElementName);
             IReadOnlyList<PropertyTreeRow> parts = partBuilder(record);
             foreach (PropertyTreeRow part in parts)
             {
@@ -51,10 +58,11 @@ public partial class MainWindowViewModel : ViewModelBase
     private static void RebuildCodeBlockTree(
         HierarchicalModel<PropertyTreeRow> model,
         IReadOnlyList<ElementPropertyRecord> records,
+        IReadOnlyDictionary<ulong, string>? preferredNamesByElementId,
         Func<ElementPropertyRecord, IReadOnlyList<PropertyTreeRow>> partBuilder,
         string rootLabel)
     {
-        PropertyTreeRow root = BuildCodeBlockTreeRoot(records, partBuilder, rootLabel);
+        PropertyTreeRow root = BuildCodeBlockTreeRoot(records, preferredNamesByElementId, partBuilder, rootLabel);
         model.SetRoot(root);
     }
 

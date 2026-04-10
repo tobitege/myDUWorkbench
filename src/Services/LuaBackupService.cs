@@ -4,6 +4,7 @@
 // - ReadBackupAsync: Loads backup file and separates metadata header from script content.
 namespace myDUWorkbench.Services;
 
+using myDUWorkbench.Helpers;
 using myDUWorkbench.Models;
 using System;
 using System.Collections.Generic;
@@ -17,7 +18,8 @@ using System.Threading.Tasks;
 
 public sealed class LuaBackupService
 {
-    private const string BackupHeaderMagic = "-- mydu-lua-backup-v1";
+    private const string LegacyBackupHeaderMagic = "-- mydu-lua-backup-v1";
+    private const string BackupHeaderMagic = "-- mydu-content-backup-v2";
     private const string BackupHeaderEnd = "-- ---";
     private const int PreviewMaxLength = 140;
 
@@ -57,10 +59,18 @@ public sealed class LuaBackupService
             request.PropertyName,
             request.SourceFilePath,
             request.SuggestedFileName,
-            BuildPreview(content));
+            BuildPreview(content),
+            request.ContentKind);
     }
 
     public async Task<IReadOnlyList<LuaBackupEntry>> GetBackupsAsync(CancellationToken cancellationToken)
+    {
+        return await GetBackupsAsync(contentKind: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<LuaBackupEntry>> GetBackupsAsync(
+        BackupContentKind? contentKind,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!Directory.Exists(_backupDirectoryPath))
@@ -68,13 +78,14 @@ public sealed class LuaBackupService
             return Array.Empty<LuaBackupEntry>();
         }
 
-        string[] files = Directory.GetFiles(_backupDirectoryPath, "*.lua.bak", SearchOption.TopDirectoryOnly);
+        string[] files = Directory.GetFiles(_backupDirectoryPath, "*.bak", SearchOption.TopDirectoryOnly);
         var entries = new List<LuaBackupEntry>(files.Length);
         foreach (string path in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
             LuaBackupDocument? document = await ReadBackupAsync(path, cancellationToken).ConfigureAwait(false);
-            if (document is not null)
+            if (document is not null &&
+                (!contentKind.HasValue || document.Entry.ContentKind == contentKind.Value))
             {
                 entries.Add(document.Entry);
             }
@@ -106,7 +117,8 @@ public sealed class LuaBackupService
             parsed.PropertyName,
             parsed.SourceFilePath,
             parsed.SuggestedFileName,
-            BuildPreview(parsed.ScriptContent));
+            BuildPreview(parsed.ScriptContent),
+            parsed.ContentKind);
         return new LuaBackupDocument(entry, raw, parsed.ScriptContent);
     }
 
@@ -123,21 +135,60 @@ public sealed class LuaBackupService
 
     public Task<int> DeleteAllBackupsAsync(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!Directory.Exists(_backupDirectoryPath))
+        return DeleteAllBackupsAsync(contentKind: null, cancellationToken);
+    }
+
+    public Task<int> DeleteAllBackupsAsync(
+        BackupContentKind? contentKind,
+        CancellationToken cancellationToken)
+    {
+        return DeleteAllBackupsCoreAsync(contentKind, cancellationToken);
+    }
+
+    public static bool LooksLikeCorruptedDatabankBackupText(string? content)
+    {
+        if (string.IsNullOrEmpty(content))
         {
-            return Task.FromResult(0);
+            return false;
         }
 
+        int replacementCount = 0;
+        int unexpectedControlCount = 0;
+        foreach (char c in content)
+        {
+            if (c == '\uFFFD')
+            {
+                replacementCount++;
+            }
+
+            if (char.IsControl(c) && c != '\r' && c != '\n' && c != '\t')
+            {
+                unexpectedControlCount++;
+            }
+        }
+
+        return replacementCount > 0 || unexpectedControlCount > Math.Max(4, content.Length / 100);
+    }
+
+    private async Task<int> DeleteAllBackupsCoreAsync(
+        BackupContentKind? contentKind,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<LuaBackupEntry> backups = await GetBackupsAsync(contentKind, cancellationToken).ConfigureAwait(false);
         int deleted = 0;
-        foreach (string filePath in Directory.GetFiles(_backupDirectoryPath, "*.lua.bak", SearchOption.TopDirectoryOnly))
+        foreach (LuaBackupEntry backup in backups)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            File.Delete(filePath);
+            if (!File.Exists(backup.FilePath))
+            {
+                continue;
+            }
+
+            File.Delete(backup.FilePath);
             deleted++;
         }
 
-        return Task.FromResult(deleted);
+        return deleted;
     }
 
     private static LuaBackupEntry BuildEntry(
@@ -150,7 +201,8 @@ public sealed class LuaBackupService
         string propertyName,
         string sourceFilePath,
         string suggestedFileName,
-        string preview)
+        string preview,
+        BackupContentKind contentKind)
     {
         return new LuaBackupEntry(
             filePath,
@@ -162,7 +214,8 @@ public sealed class LuaBackupService
             propertyName ?? string.Empty,
             sourceFilePath ?? string.Empty,
             suggestedFileName ?? string.Empty,
-            preview ?? string.Empty);
+            preview ?? string.Empty,
+            contentKind);
     }
 
     private static string BuildBackupFileName(LuaBackupCreateRequest request, DateTimeOffset backupUtc)
@@ -205,7 +258,7 @@ public sealed class LuaBackupService
             }
         }
 
-        return string.Join("_", parts) + ".lua.bak";
+        return string.Join("_", parts) + GetBackupFileExtension(request.ContentKind);
     }
 
     private static string BuildHeader(LuaBackupCreateRequest request, DateTimeOffset backupUtc, string content)
@@ -213,6 +266,7 @@ public sealed class LuaBackupService
         string hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
         var header = new StringBuilder();
         header.AppendLine(BackupHeaderMagic);
+        header.AppendLine($"-- contentKind: {request.ContentKind}");
         header.AppendLine($"-- backupUtc: {backupUtc:O}");
         header.AppendLine($"-- elementId: {(request.ElementId.HasValue ? request.ElementId.Value.ToString(CultureInfo.InvariantCulture) : string.Empty)}");
         header.AppendLine($"-- elementName: {NormalizeHeaderValue(request.ElementDisplayName)}");
@@ -252,30 +306,7 @@ public sealed class LuaBackupService
 
     private static string SanitizeFileNameSegment(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        string invalidChars = new(Path.GetInvalidFileNameChars());
-        var sanitized = new StringBuilder(value.Length);
-        foreach (char c in value)
-        {
-            if (invalidChars.IndexOf(c) >= 0)
-            {
-                sanitized.Append('_');
-            }
-            else if (char.IsWhiteSpace(c))
-            {
-                sanitized.Append('_');
-            }
-            else
-            {
-                sanitized.Append(c);
-            }
-        }
-
-        string compact = sanitized.ToString().Trim('_');
+        string compact = FileNameHelper.SanitizeGeneratedFileName(value, string.Empty);
         if (compact.Length > 80)
         {
             compact = compact[..80];
@@ -288,17 +319,21 @@ public sealed class LuaBackupService
     {
         DateTimeOffset fallbackUtc = File.GetLastWriteTimeUtc(filePath);
         string fileName = Path.GetFileName(filePath);
+        BackupContentKind inferredContentKind = InferContentKind(filePath);
 
-        if (string.IsNullOrWhiteSpace(raw) || !raw.StartsWith(BackupHeaderMagic, StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(raw) ||
+            (!raw.StartsWith(BackupHeaderMagic, StringComparison.Ordinal) &&
+             !raw.StartsWith(LegacyBackupHeaderMagic, StringComparison.Ordinal)))
         {
             return new ParsedBackup(
+                inferredContentKind,
                 fallbackUtc,
                 null,
                 string.Empty,
                 string.Empty,
                 string.Empty,
                 string.Empty,
-                Path.GetFileNameWithoutExtension(fileName),
+                StripBackupFileSuffix(fileName),
                 raw ?? string.Empty);
         }
 
@@ -307,13 +342,14 @@ public sealed class LuaBackupService
         if (headerEndIndex < 0)
         {
             return new ParsedBackup(
+                inferredContentKind,
                 fallbackUtc,
                 null,
                 string.Empty,
                 string.Empty,
                 string.Empty,
                 string.Empty,
-                Path.GetFileNameWithoutExtension(fileName),
+                StripBackupFileSuffix(fileName),
                 raw);
         }
 
@@ -346,6 +382,13 @@ public sealed class LuaBackupService
             values[key] = value;
         }
 
+        BackupContentKind contentKind = inferredContentKind;
+        if (values.TryGetValue("contentKind", out string? contentKindText) &&
+            Enum.TryParse(contentKindText, ignoreCase: true, out BackupContentKind parsedContentKind))
+        {
+            contentKind = parsedContentKind;
+        }
+
         DateTimeOffset backupUtc = fallbackUtc;
         if (values.TryGetValue("backupUtc", out string? backupUtcText) &&
             DateTimeOffset.TryParse(backupUtcText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset parsedUtc))
@@ -367,17 +410,19 @@ public sealed class LuaBackupService
         values.TryGetValue("suggestedFileName", out string? suggestedFileName);
 
         return new ParsedBackup(
+            contentKind,
             backupUtc,
             elementId,
             elementName ?? string.Empty,
             nodeLabel ?? string.Empty,
             propertyName ?? string.Empty,
             sourceFilePath ?? string.Empty,
-            string.IsNullOrWhiteSpace(suggestedFileName) ? Path.GetFileNameWithoutExtension(fileName) : suggestedFileName,
+            string.IsNullOrWhiteSpace(suggestedFileName) ? StripBackupFileSuffix(fileName) : suggestedFileName,
             script);
     }
 
     private sealed record ParsedBackup(
+        BackupContentKind ContentKind,
         DateTimeOffset BackupUtc,
         ulong? ElementId,
         string ElementDisplayName,
@@ -386,4 +431,37 @@ public sealed class LuaBackupService
         string SourceFilePath,
         string SuggestedFileName,
         string ScriptContent);
+
+    private static string GetBackupFileExtension(BackupContentKind contentKind)
+    {
+        return contentKind == BackupContentKind.Databank
+            ? ".databank.bak"
+            : ".lua.bak";
+    }
+
+    private static BackupContentKind InferContentKind(string filePath)
+    {
+        string fileName = Path.GetFileName(filePath);
+        if (fileName.EndsWith(".databank.bak", StringComparison.OrdinalIgnoreCase))
+        {
+            return BackupContentKind.Databank;
+        }
+
+        return BackupContentKind.Lua;
+    }
+
+    private static string StripBackupFileSuffix(string fileName)
+    {
+        if (fileName.EndsWith(".databank.bak", StringComparison.OrdinalIgnoreCase))
+        {
+            return fileName[..^".databank.bak".Length];
+        }
+
+        if (fileName.EndsWith(".lua.bak", StringComparison.OrdinalIgnoreCase))
+        {
+            return fileName[..^".lua.bak".Length];
+        }
+
+        return Path.GetFileNameWithoutExtension(fileName);
+    }
 }

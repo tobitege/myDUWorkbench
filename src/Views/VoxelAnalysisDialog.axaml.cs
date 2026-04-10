@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using myDUWorkbench.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -10,7 +11,6 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 
 namespace myDUWorkbench.Views;
 
@@ -308,14 +308,7 @@ public partial class VoxelAnalysisDialog : Window
 
     private string BuildDefaultExportFileName()
     {
-        string baseName = string.IsNullOrWhiteSpace(Title) ? "voxel_analysis" : Title.Trim();
-        baseName = Regex.Replace(baseName, @"\s+", "_");
-        baseName = Regex.Replace(baseName, @"[^A-Za-z0-9._-]", string.Empty);
-        if (string.IsNullOrWhiteSpace(baseName))
-        {
-            baseName = "voxel_analysis";
-        }
-
+        string baseName = FileNameHelper.SanitizeGeneratedFileName(Title, "voxel_analysis");
         string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
         return $"{baseName}_{timestamp}.json";
     }

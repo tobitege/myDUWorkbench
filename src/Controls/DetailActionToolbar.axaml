@@ -1,0 +1,76 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="myDUWorkbench.Controls.DetailActionToolbar"
+             x:Name="Root">
+    <Border BorderThickness="1"
+            BorderBrush="#505050"
+            CornerRadius="4"
+            Padding="8">
+        <StackPanel Orientation="Horizontal"
+                    Spacing="10"
+                    HorizontalAlignment="Left">
+            <Button IsVisible="{Binding ShowSaveButton, ElementName=Root}"
+                    IsEnabled="{Binding IsSaveEnabled, ElementName=Root}"
+                    Click="OnSaveClick">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <PathIcon Width="14" Height="14" Data="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
+                    <TextBlock Text="Save as..." VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <Button IsVisible="{Binding ShowEditButton, ElementName=Root}"
+                    IsEnabled="{Binding IsEditEnabled, ElementName=Root}"
+                    Click="OnEditClick">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <PathIcon Width="14" Height="14" Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                    <TextBlock Text="Edit" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <Button IsVisible="{Binding ShowRefreshButton, ElementName=Root}"
+                    IsEnabled="{Binding IsRefreshEnabled, ElementName=Root}"
+                    Click="OnRefreshClick">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <PathIcon Width="14" Height="14" Data="M17.65 6.35A8 8 0 1 0 20 12H18A6 6 0 1 1 16.24 7.76L13 11H20V4L17.65 6.35Z" />
+                    <TextBlock Text="Refresh" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <Button IsVisible="{Binding ShowBackupsButton, ElementName=Root}"
+                    IsEnabled="{Binding IsBackupsEnabled, ElementName=Root}"
+                    Click="OnBackupsClick">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <PathIcon Width="14" Height="14" Data="M13 3a9 9 0 1 0 8.95 10H20a7 7 0 1 1-2.05-4.95L15 11h7V4l-2.64 2.64A8.96 8.96 0 0 0 13 3zm-1 5h2v6h-2V8zm0 8h2v2h-2v-2z" />
+                    <TextBlock Text="{Binding BackupsButtonText, ElementName=Root}" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <ToggleButton IsVisible="{Binding ShowPrettyPrintButton, ElementName=Root}"
+                          IsEnabled="{Binding IsPrettyPrintEnabled, ElementName=Root}"
+                          IsChecked="{Binding PrettyPrintChecked, ElementName=Root, Mode=TwoWay}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <PathIcon Width="14" Height="14" Data="M3 5h18v2H3V5zm3 4h12v2H6V9zm-3 4h18v2H3v-2zm3 4h12v2H6v-2z" />
+                    <TextBlock Text="Pretty Print" VerticalAlignment="Center" />
+                </StackPanel>
+            </ToggleButton>
+
+            <CheckBox IsVisible="{Binding ShowWrapToggle, ElementName=Root}"
+                      IsChecked="{Binding WrapChecked, ElementName=Root, Mode=TwoWay}"
+                      Width="120">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <PathIcon Width="14" Height="14" Data="M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3 3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z" />
+                    <TextBlock Text="Auto-wrap" VerticalAlignment="Center" />
+                </StackPanel>
+            </CheckBox>
+
+            <Button IsVisible="{Binding ShowClearButton, ElementName=Root}"
+                    IsEnabled="{Binding IsClearEnabled, ElementName=Root}"
+                    Click="OnClearClick">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <PathIcon Width="14" Height="14" Data="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zm3.46-7.12 1.41-1.41L12 11.59l1.12-1.12 1.41 1.41L13.41 13l1.12 1.12-1.41 1.41L12 14.41l-1.12 1.12-1.41-1.41L10.59 13l-1.13-1.12zM15.5 4l-1-1h-5l-1 1H5v2h14V4z" />
+                    <TextBlock Text="Clear DB" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+        </StackPanel>
+    </Border>
+</UserControl>

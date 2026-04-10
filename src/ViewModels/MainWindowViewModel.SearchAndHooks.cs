@@ -103,6 +103,7 @@ public partial class MainWindowViewModel : ViewModelBase
             await Task.Delay(250, cancellationToken);
             DataConnectionOptions options = BuildDbOptions();
             IReadOnlyList<ConstructNameLookupRecord> results;
+            int totalScopedResultCount = 0;
             if (scopedPlayerId.HasValue)
             {
                 IReadOnlyList<UserConstructRecord> userConstructs = await _dataService.GetUserConstructsSortedByNameAsync(
@@ -116,6 +117,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     .Select(c => new ConstructNameLookupRecord(c.ConstructId, c.ConstructName))
                     .GroupBy(c => c.ConstructId)
                     .Select(g => g.First());
+                totalScopedResultCount = scopedResults.Count();
 
                 if (!string.IsNullOrWhiteSpace(normalizedFilter))
                 {
@@ -156,7 +158,11 @@ public partial class MainWindowViewModel : ViewModelBase
             }
 
             ConstructSearchStatus = scopedPlayerId.HasValue
-                ? $"{ConstructNameSuggestions.Count} found for player {scopedPlayerId.Value}"
+                ? BuildScopedConstructSearchStatus(
+                    scopedPlayerId.Value,
+                    ConstructNameSuggestions.Count,
+                    input,
+                    totalScopedResultCount)
                 : $"{ConstructNameSuggestions.Count} found";
         }
         catch (OperationCanceledException)
@@ -416,6 +422,21 @@ public partial class MainWindowViewModel : ViewModelBase
             .Replace("_", ".") + "$";
 
         return Regex.IsMatch(candidate, regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string BuildScopedConstructSearchStatus(
+        ulong scopedPlayerId,
+        int filteredCount,
+        string? input,
+        int totalScopedResultCount)
+    {
+        string normalizedFilter = input?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedFilter))
+        {
+            return $"{filteredCount} for player {scopedPlayerId}";
+        }
+
+        return $"{filteredCount}/{totalScopedResultCount} for player {scopedPlayerId}";
     }
 
     private void UpdateDatabaseSummary(DatabaseConstructSnapshot snapshot)
@@ -708,6 +729,10 @@ public partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasBlueprintEditValidationError));
         OnPropertyChanged(nameof(CanRepairDestroyedElements));
         OnPropertyChanged(nameof(CanExportBlueprintElementSummary));
+        OnPropertyChanged(nameof(CanRefreshLuaDisplay));
+        OnPropertyChanged(nameof(CanRefreshHtmlRsDisplay));
+        OnPropertyChanged(nameof(CanRefreshDatabankDisplay));
+        OnPropertyChanged(nameof(CanClearSelectedDatabank));
     }
 
     partial void OnAutoConnectNextRetrySecondsChanged(int? value)
@@ -738,8 +763,9 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         PropertyTreeRow? row = ResolveSelectedTreeRow(value);
         _selectedDpuyamlNodeKey = BuildSelectionKey(row);
-        SelectedDpuyaml6Content = row?.FullContent ?? string.Empty;
+        RefreshSelectedLuaContent(row);
         OnPropertyChanged(nameof(CanSaveSelectedLuaBlob));
+        OnPropertyChanged(nameof(CanPrettyPrintSelectedLua));
     }
 
     partial void OnSelectedElementPropertyNodeChanged(object? value)
@@ -815,16 +841,19 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         PropertyTreeRow? row = ResolveSelectedTreeRow(value);
         _selectedContent2NodeKey = BuildSelectionKey(row);
-        SelectedContent2Content = row?.FullContent ?? string.Empty;
+        RefreshSelectedHtmlRsContent(row);
         OnPropertyChanged(nameof(CanSaveSelectedHtmlRsBlob));
+        OnPropertyChanged(nameof(CanPrettyPrintSelectedHtmlRs));
     }
 
     partial void OnSelectedDatabankNodeChanged(object? value)
     {
         PropertyTreeRow? row = ResolveSelectedTreeRow(value);
         _selectedDatabankNodeKey = BuildSelectionKey(row);
-        SelectedDatabankContent = row?.FullContent ?? string.Empty;
+        RefreshSelectedDatabankContent(row);
         OnPropertyChanged(nameof(CanSaveSelectedDatabankBlob));
+        OnPropertyChanged(nameof(CanPrettyPrintSelectedDatabank));
+        OnPropertyChanged(nameof(CanClearSelectedDatabank));
     }
 
     partial void OnIsBusyChanged(bool value)
@@ -841,6 +870,10 @@ public partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasBlueprintEditValidationError));
         OnPropertyChanged(nameof(CanExportConstructBrowserElementSummary));
         OnPropertyChanged(nameof(CanExportBlueprintElementSummary));
+        OnPropertyChanged(nameof(CanRefreshLuaDisplay));
+        OnPropertyChanged(nameof(CanRefreshHtmlRsDisplay));
+        OnPropertyChanged(nameof(CanRefreshDatabankDisplay));
+        OnPropertyChanged(nameof(CanClearSelectedDatabank));
     }
 
     partial void OnRepairInProgressChanged(bool value)

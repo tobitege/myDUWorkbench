@@ -91,7 +91,8 @@ public partial class MainWindow : Window
             _luaEditorSourceContext?.ElementId,
             _luaEditorSourceContext?.ElementDisplayName ?? string.Empty,
             fallbackNodeLabel,
-            fallbackPropertyName);
+            fallbackPropertyName,
+            BackupContentKind.Lua);
         await _luaBackupService.CreateBackupAsync(request, default);
     }
 

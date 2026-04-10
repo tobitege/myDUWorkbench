@@ -1114,6 +1114,214 @@ public partial class MainWindow : Window
         await SaveBlobAsync(vm, request, "Save Databank Blob");
     }
 
+    private async void OnRefreshLuaClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await vm.RefreshLuaDisplayAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            vm.StatusMessage = $"LUA refresh failed: {ex.Message}";
+        }
+    }
+
+    private async void OnRefreshHtmlRsClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await vm.RefreshHtmlRsDisplayAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            vm.StatusMessage = $"HTML/RS refresh failed: {ex.Message}";
+        }
+    }
+
+    private async void OnRefreshDatabankClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await vm.RefreshDatabankDisplayAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            vm.StatusMessage = $"Databank refresh failed: {ex.Message}";
+        }
+    }
+
+    private async void OnClearDatabankClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        string elementLabel = TryResolvePropertyTreeRow(vm.SelectedDatabankNode, out PropertyTreeRow? selectedRow)
+            ? selectedRow?.NodeLabel ?? "selected databank"
+            : "selected databank";
+        string prompt = $"Clear databank contents for '{elementLabel}'?";
+        const string details = "This creates a live local backup from the current DB value, overwrites the databank payload in the database with an empty table, and then reloads the live construct snapshot.";
+        var dialog = new ConfirmationDialog(
+            "Clear Databank",
+            prompt,
+            "Clear DB",
+            "Cancel",
+            detailsText: details);
+        bool confirmed = await dialog.ShowDialog<bool>(this);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            LuaBackupEntry? backupEntry = await vm.ClearSelectedDatabankAsync(
+                async (backupRequest, token) =>
+                {
+                    try
+                    {
+                        return await _luaBackupService.CreateBackupAsync(backupRequest, token);
+                    }
+                    catch (Exception backupEx)
+                    {
+                        throw new InvalidOperationException($"Backup creation failed: {backupEx.Message}", backupEx);
+                    }
+                },
+                cts.Token);
+            vm.StatusMessage = backupEntry is null
+                ? $"Cleared databank '{elementLabel}'."
+                : $"Cleared databank '{elementLabel}' with backup {backupEntry.FileName}.";
+        }
+        catch (Exception ex)
+        {
+            string message = ex.Message.StartsWith("Backup creation failed:", StringComparison.Ordinal)
+                ? $"Clear databank blocked: {ex.Message}"
+                : $"Clear databank failed: {ex.Message}";
+            vm.StatusMessage = message;
+        }
+    }
+
+    private async void OnDatabankBackupsClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+
+        if (DataContext is not MainWindowViewModel vm)
+        {
+            return;
+        }
+
+        try
+        {
+            string currentContent =
+                vm.TryGetSelectedDatabankBackupRequest(out LuaBackupCreateRequest? currentRequest) &&
+                currentRequest is not null
+                    ? currentRequest.Content
+                    : string.Empty;
+            var dialog = new LuaBackupManagerDialog(
+                _luaBackupService,
+                currentContent,
+                LuaBackupManagerDialog.CreateDatabankOptions());
+            BackupManagerDialogResult? result = await dialog.ShowDialog<BackupManagerDialogResult?>(this);
+            if (result is null)
+            {
+                return;
+            }
+
+            if (result.ContentKind != BackupContentKind.Databank ||
+                !result.ElementId.HasValue ||
+                result.ElementId.Value == 0UL)
+            {
+                vm.StatusMessage = "Selected backup cannot be restored because it does not contain a databank target.";
+                return;
+            }
+
+            if (LuaBackupService.LooksLikeCorruptedDatabankBackupText(result.Content))
+            {
+                vm.StatusMessage = "Selected databank backup looks corrupted by the old backup decoding bug and cannot be restored safely.";
+                return;
+            }
+
+            string targetLabel = string.IsNullOrWhiteSpace(result.NodeLabel)
+                ? string.IsNullOrWhiteSpace(result.ElementDisplayName)
+                    ? $"element {result.ElementId.Value.ToString(CultureInfo.InvariantCulture)}"
+                    : result.ElementDisplayName
+                : result.NodeLabel;
+            string restorePrompt = $"Restore the selected backup to databank '{targetLabel}'?";
+            string restoreDetails =
+                $"This creates a live local backup of the current DB value for element {result.ElementId.Value.ToString(CultureInfo.InvariantCulture)}, restores the selected backup content, and reloads the live construct snapshot.";
+            var confirmDialog = new ConfirmationDialog(
+                "Restore Databank Backup",
+                restorePrompt,
+                "Restore",
+                "Cancel",
+                detailsText: restoreDetails);
+            bool confirmed = await confirmDialog.ShowDialog<bool>(this);
+            if (!confirmed)
+            {
+                return;
+            }
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            LuaBackupEntry? liveBackupEntry = await vm.RestoreDatabankBackupAsync(
+                result,
+                async (backupRequest, token) =>
+                {
+                    try
+                    {
+                        return await _luaBackupService.CreateBackupAsync(backupRequest, token);
+                    }
+                    catch (Exception backupEx)
+                    {
+                        throw new InvalidOperationException($"Backup creation failed: {backupEx.Message}", backupEx);
+                    }
+                },
+                cts.Token);
+            vm.StatusMessage = liveBackupEntry is null
+                ? $"Restored databank backup to '{targetLabel}'."
+                : $"Restored databank backup to '{targetLabel}' with current value backed up as {liveBackupEntry.FileName}.";
+        }
+        catch (Exception ex)
+        {
+            string message = ex.Message.StartsWith("Backup creation failed:", StringComparison.Ordinal)
+                ? $"Restore databank backup blocked: {ex.Message}"
+                : $"Restore databank backup failed: {ex.Message}";
+            vm.StatusMessage = message;
+        }
+    }
+
     private async Task SaveBlobAsync(
         MainWindowViewModel vm,
         MainWindowViewModel.BlobSaveRequest request,

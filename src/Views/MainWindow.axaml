@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:myDUWorkbench.ViewModels"
+        xmlns:controls="using:myDUWorkbench.Controls"
         xmlns:hier="clr-namespace:Avalonia.Controls.DataGridHierarchical;assembly=Avalonia.Controls.DataGrid"
         xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -45,7 +46,7 @@
                                     CornerRadius="4"
                                     Padding="8">
                                 <StackPanel Spacing="4">
-                                    <TextBlock Text="Construct Name Filter (wildcard * supported)" />
+                                    <TextBlock Text="Construct Name/Id Filter (wildcard * supported)" />
                                     <Grid ColumnDefinitions="150,*"
                                           ColumnSpacing="8">
                                         <TextBox Grid.Column="0"
@@ -53,7 +54,7 @@
                                                  Width="150"
                                                  MaxWidth="150"
                                                  HorizontalAlignment="Left"
-                                                 Watermark="Big or Big*">
+                                                 Watermark="Bigfoot, 1002037, or Big*">
                                             <TextBox.KeyBindings>
                                                 <KeyBinding Gesture="Enter"
                                                             Command="{Binding UseConstructSuggestionAndLoadCommand}" />
@@ -632,7 +633,7 @@
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Margin="0,6,0,0">
-                                    <Grid RowDefinitions="Auto,3*,Auto,4*"
+                                    <Grid RowDefinitions="Auto,3*,Auto,*"
                                           RowSpacing="8">
                                         <StackPanel Grid.Row="0"
                                                     Orientation="Horizontal"
@@ -647,13 +648,6 @@
                                                     ToolTip.Tip="Collapse all"
                                                     Padding="8,6">
                                                 <PathIcon Width="14" Height="14" Data="M16.59 5.41L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59zM12 14l-4.59 4.59L8.83 20 12 16.83 15.17 20l1.41-1.41L12 14z" />
-                                            </Button>
-                                            <Button Click="OnSaveLuaAsClick"
-                                                    IsEnabled="{Binding CanSaveSelectedLuaBlob}">
-                                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                                    <PathIcon Width="14" Height="14" Data="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
-                                                    <TextBlock Text="Save as..." VerticalAlignment="Center" />
-                                                </StackPanel>
                                             </Button>
                                             <Button Click="OnEditLuaClick"
                                                     IsEnabled="{Binding CanSaveSelectedLuaBlob}">
@@ -726,14 +720,34 @@
                                                       ResizeDirection="Rows"
                                                       Background="#505050" />
 
-                                        <TextBox Grid.Row="3"
-                                                 IsReadOnly="True"
-                                                 AcceptsReturn="True"
-                                                 TextWrapping="{Binding ContentTextWrapping}"
-                                                 FontFamily="Consolas"
-                                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                                 Text="{Binding SelectedDpuyaml6Content}" />
+                                        <Grid Grid.Row="3"
+                                              RowDefinitions="Auto,*"
+                                              RowSpacing="8">
+                                            <controls:DetailActionToolbar Grid.Row="0"
+                                                                          IsSaveEnabled="{Binding CanSaveSelectedLuaBlob}"
+                                                                          IsRefreshEnabled="{Binding CanRefreshLuaDisplay}"
+                                                                          IsPrettyPrintEnabled="{Binding CanPrettyPrintSelectedLua}"
+                                                                          PrettyPrintChecked="{Binding LuaPrettyPrintEnabled, Mode=TwoWay}"
+                                                                          ShowEditButton="False"
+                                                                          ShowWrapToggle="False"
+                                                                          ShowClearButton="False"
+                                                                          SaveClick="OnSaveLuaAsClick"
+                                                                          RefreshClick="OnRefreshLuaClick" />
+
+                                            <Border Grid.Row="1"
+                                                    BorderThickness="1"
+                                                    BorderBrush="#505050"
+                                                    CornerRadius="4"
+                                                    Padding="0">
+                                                <TextBox IsReadOnly="True"
+                                                         AcceptsReturn="True"
+                                                         TextWrapping="{Binding ContentTextWrapping}"
+                                                         FontFamily="Consolas"
+                                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                         Text="{Binding SelectedDpuyaml6Content}" />
+                                            </Border>
+                                        </Grid>
                                     </Grid>
                                 </Border>
                             </TabItem>
@@ -743,7 +757,7 @@
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Margin="0,6,0,0">
-                                    <Grid RowDefinitions="Auto,3*,Auto,4*"
+                                    <Grid RowDefinitions="Auto,3*,Auto,*"
                                           RowSpacing="8">
                                         <StackPanel Grid.Row="0"
                                                     Orientation="Horizontal"
@@ -758,13 +772,6 @@
                                                     ToolTip.Tip="Collapse all"
                                                     Padding="8,6">
                                                 <PathIcon Width="14" Height="14" Data="M16.59 5.41L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59zM12 14l-4.59 4.59L8.83 20 12 16.83 15.17 20l1.41-1.41L12 14z" />
-                                            </Button>
-                                            <Button Click="OnSaveHtmlRsAsClick"
-                                                    IsEnabled="{Binding CanSaveSelectedHtmlRsBlob}">
-                                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                                    <PathIcon Width="14" Height="14" Data="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
-                                                    <TextBlock Text="Save as..." VerticalAlignment="Center" />
-                                                </StackPanel>
                                             </Button>
                                             <CheckBox IsChecked="{Binding AutoWrapContent}"
                                                       Width="120">
@@ -830,14 +837,34 @@
                                                       ResizeDirection="Rows"
                                                       Background="#505050" />
 
-                                        <TextBox Grid.Row="3"
-                                                 IsReadOnly="True"
-                                                 AcceptsReturn="True"
-                                                 TextWrapping="{Binding ContentTextWrapping}"
-                                                 FontFamily="Consolas"
-                                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                                 Text="{Binding SelectedContent2Content}" />
+                                        <Grid Grid.Row="3"
+                                              RowDefinitions="Auto,*"
+                                              RowSpacing="8">
+                                            <controls:DetailActionToolbar Grid.Row="0"
+                                                                          IsSaveEnabled="{Binding CanSaveSelectedHtmlRsBlob}"
+                                                                          IsRefreshEnabled="{Binding CanRefreshHtmlRsDisplay}"
+                                                                          IsPrettyPrintEnabled="{Binding CanPrettyPrintSelectedHtmlRs}"
+                                                                          PrettyPrintChecked="{Binding HtmlRsPrettyPrintEnabled, Mode=TwoWay}"
+                                                                          ShowEditButton="False"
+                                                                          ShowWrapToggle="False"
+                                                                          ShowClearButton="False"
+                                                                          SaveClick="OnSaveHtmlRsAsClick"
+                                                                          RefreshClick="OnRefreshHtmlRsClick" />
+
+                                            <Border Grid.Row="1"
+                                                    BorderThickness="1"
+                                                    BorderBrush="#505050"
+                                                    CornerRadius="4"
+                                                    Padding="0">
+                                                <TextBox IsReadOnly="True"
+                                                         AcceptsReturn="True"
+                                                         TextWrapping="{Binding ContentTextWrapping}"
+                                                         FontFamily="Consolas"
+                                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                         Text="{Binding SelectedContent2Content}" />
+                                            </Border>
+                                        </Grid>
                                     </Grid>
                                 </Border>
                             </TabItem>
@@ -847,7 +874,7 @@
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Margin="0,6,0,0">
-                                    <Grid RowDefinitions="Auto,3*,Auto,4*"
+                                    <Grid RowDefinitions="Auto,3*,Auto,*"
                                           RowSpacing="8">
                                         <StackPanel Grid.Row="0"
                                                     Orientation="Horizontal"
@@ -862,13 +889,6 @@
                                                     ToolTip.Tip="Collapse all"
                                                     Padding="8,6">
                                                 <PathIcon Width="14" Height="14" Data="M16.59 5.41L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59zM12 14l-4.59 4.59L8.83 20 12 16.83 15.17 20l1.41-1.41L12 14z" />
-                                            </Button>
-                                            <Button Click="OnSaveDatabankAsClick"
-                                                    IsEnabled="{Binding CanSaveSelectedDatabankBlob}">
-                                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                                    <PathIcon Width="14" Height="14" Data="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
-                                                    <TextBlock Text="Save as..." VerticalAlignment="Center" />
-                                                </StackPanel>
                                             </Button>
                                             <CheckBox IsChecked="{Binding AutoWrapContent}"
                                                       Width="120">
@@ -945,14 +965,35 @@
                                                       ResizeDirection="Rows"
                                                       Background="#505050" />
 
-                                        <TextBox Grid.Row="3"
-                                                 IsReadOnly="True"
-                                                 AcceptsReturn="True"
-                                                 TextWrapping="{Binding ContentTextWrapping}"
-                                                 FontFamily="Consolas"
-                                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                                 Text="{Binding SelectedDatabankContent}" />
+                                        <Grid Grid.Row="3"
+                                              RowDefinitions="Auto,*"
+                                              RowSpacing="8">
+                                            <controls:DetailActionToolbar Grid.Row="0"
+                                                                          IsSaveEnabled="{Binding CanSaveSelectedDatabankBlob}"
+                                                                          IsRefreshEnabled="{Binding CanRefreshDatabankDisplay}"
+                                                                          ShowBackupsButton="True"
+                                                                          IsPrettyPrintEnabled="{Binding CanPrettyPrintSelectedDatabank}"
+                                                                          PrettyPrintChecked="{Binding DatabankPrettyPrintEnabled, Mode=TwoWay}"
+                                                                          IsClearEnabled="{Binding CanClearSelectedDatabank}"
+                                                                          SaveClick="OnSaveDatabankAsClick"
+                                                                          BackupsClick="OnDatabankBackupsClick"
+                                                                          RefreshClick="OnRefreshDatabankClick"
+                                                                          ClearClick="OnClearDatabankClick" />
+
+                                            <Border Grid.Row="1"
+                                                    BorderThickness="1"
+                                                    BorderBrush="#505050"
+                                                    CornerRadius="4"
+                                                    Padding="0">
+                                                <TextBox IsReadOnly="True"
+                                                         AcceptsReturn="True"
+                                                         TextWrapping="{Binding ContentTextWrapping}"
+                                                         FontFamily="Consolas"
+                                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                         Text="{Binding SelectedDatabankContent}" />
+                                            </Border>
+                                        </Grid>
                                     </Grid>
                                 </Border>
                             </TabItem>

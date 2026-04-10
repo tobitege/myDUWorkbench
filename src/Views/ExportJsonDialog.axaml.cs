@@ -8,11 +8,11 @@ using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using myDUWorkbench.Helpers;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace myDUWorkbench.Views;
 
@@ -105,14 +105,7 @@ public partial class ExportJsonDialog : Window
 
     private string BuildDefaultExportFileName()
     {
-        string baseName = string.IsNullOrWhiteSpace(Title) ? "export_json" : Title.Trim();
-        baseName = Regex.Replace(baseName, @"\s+", "_");
-        baseName = Regex.Replace(baseName, @"[^A-Za-z0-9._-]", string.Empty);
-        if (string.IsNullOrWhiteSpace(baseName))
-        {
-            baseName = "export_json";
-        }
-
+        string baseName = FileNameHelper.SanitizeGeneratedFileName(Title, "export_json");
         string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         return $"{baseName}_{timestamp}.json";
     }

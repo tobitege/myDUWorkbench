@@ -555,15 +555,19 @@ public partial class MainWindowViewModel : ViewModelBase
 
         cancellationToken.ThrowIfCancellationRequested();
         progressUpdate?.Invoke(76d, "Import: building LUA/HTML/Databank trees");
+        Dictionary<ulong, string> preferredElementNamesById = BuildPreferredElementDisplayNameById(records);
+        string preservedDpuyamlNodeKey = _selectedDpuyamlNodeKey;
+        string preservedContent2NodeKey = _selectedContent2NodeKey;
+        string preservedDatabankNodeKey = _selectedDatabankNodeKey;
 
         Task<PropertyTreeRow> luaTreeTask = Task.Run(
-            () => BuildCodeBlockTreeRoot(dpuyamlProperties, BuildLuaPartRows, "LUA blocks"),
+            () => BuildCodeBlockTreeRoot(dpuyamlProperties, preferredElementNamesById, BuildLuaPartRows, "LUA blocks"),
             cancellationToken);
         Task<PropertyTreeRow> htmlTreeTask = Task.Run(
-            () => BuildCodeBlockTreeRoot(content2Properties, BuildContentPartRows, "HTML/RS"),
+            () => BuildCodeBlockTreeRoot(content2Properties, preferredElementNamesById, BuildContentPartRows, "HTML/RS"),
             cancellationToken);
         Task<PropertyTreeRow> databankTreeTask = Task.Run(
-            () => BuildCodeBlockTreeRoot(databankProperties, BuildDatabankPartRows, "Databank"),
+            () => BuildCodeBlockTreeRoot(databankProperties, preferredElementNamesById, BuildDatabankPartRows, "Databank"),
             cancellationToken);
 
         PropertyTreeRow luaRoot = await luaTreeTask;
@@ -615,9 +619,9 @@ public partial class MainWindowViewModel : ViewModelBase
             DatabankModel.CollapseAll(minDepth: 1);
         }
 
-        SelectedDpuyaml6Node = FindNodeBySelectionKey(Dpuyaml6Model, _selectedDpuyamlNodeKey);
-        SelectedContent2Node = FindNodeBySelectionKey(Content2Model, _selectedContent2NodeKey);
-        SelectedDatabankNode = FindNodeBySelectionKey(DatabankModel, _selectedDatabankNodeKey);
+        SelectedDpuyaml6Node = FindNodeBySelectionKey(Dpuyaml6Model, preservedDpuyamlNodeKey);
+        SelectedContent2Node = FindNodeBySelectionKey(Content2Model, preservedContent2NodeKey);
+        SelectedDatabankNode = FindNodeBySelectionKey(DatabankModel, preservedDatabankNodeKey);
 
         if (SelectedDpuyaml6Node is null)
         {
