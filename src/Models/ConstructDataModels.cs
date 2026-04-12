@@ -121,9 +121,12 @@ public sealed class PropertyTreeRow
 
 public sealed record ConstructNameLookupRecord(
     ulong ConstructId,
-    string ConstructName)
+    string ConstructName,
+    ConstructSuggestionKind Kind = ConstructSuggestionKind.Construct)
 {
-    public string DisplayLabel => $"{ConstructId} | {ConstructName}";
+    public string DisplayLabel => Kind == ConstructSuggestionKind.Blueprint
+        ? $"{ConstructId} | [BP] {ConstructName}"
+        : $"{ConstructId} | {ConstructName}";
 }
 
 public sealed record PlayerNameLookupRecord(
@@ -187,6 +190,12 @@ public enum ConstructListSort
 {
     Name = 0,
     Id = 1
+}
+
+public enum ConstructSuggestionKind
+{
+    Construct = 0,
+    Blueprint = 1
 }
 
 public sealed record UserConstructRecord(

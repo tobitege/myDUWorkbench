@@ -459,6 +459,20 @@ public partial class MainWindowViewModel : ViewModelBase
             return false;
         }
 
+        return await OpenBlueprintInConstructBrowserAsync(bp.Id, bp.Name, cancellationToken);
+    }
+
+    private async Task<bool> OpenBlueprintInConstructBrowserAsync(
+        ulong blueprintId,
+        string? blueprintName,
+        CancellationToken cancellationToken)
+    {
+        if (blueprintId == 0UL)
+        {
+            StatusMessage = "No blueprint selected.";
+            return false;
+        }
+
         if (IsBusy)
         {
             return false;
@@ -469,12 +483,16 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             IsBusy = true;
-            BlueprintsStatus = $"Opening blueprint {bp.Id} in Construct Browser...";
+            string openingName = string.IsNullOrWhiteSpace(blueprintName)
+                ? $"Blueprint {blueprintId.ToString(CultureInfo.InvariantCulture)}"
+                : blueprintName.Trim();
+            BlueprintsStatus = $"Opening blueprint {blueprintId} in Construct Browser...";
+            StatusMessage = $"Opening blueprint {blueprintId} in Construct Browser...";
             DataConnectionOptions options = BuildDbOptions();
 
             string exportedJson = await _dataService.ExportBlueprintJsonAsync(
                 options,
-                bp.Id,
+                blueprintId,
                 EndpointTemplateInput,
                 BlueprintImportEndpointInput,
                 excludeVoxels: false,
@@ -484,12 +502,12 @@ public partial class MainWindowViewModel : ViewModelBase
             BlueprintImportResult importResult = await Task.Run(
                 () => _dataService.ParseBlueprintJson(
                     exportedJson,
-                    $"blueprint_{bp.Id.ToString(CultureInfo.InvariantCulture)}",
+                    $"blueprint_{blueprintId.ToString(CultureInfo.InvariantCulture)}",
                     ServerRootPathInput,
                     NqUtilsDllPathInput),
                 cancellationToken);
             IReadOnlyList<ElementPropertyRecord> dbElementProperties =
-                await _dataService.GetBlueprintElementPropertiesAsync(options, bp.Id, cancellationToken);
+                await _dataService.GetBlueprintElementPropertiesAsync(options, blueprintId, cancellationToken);
             if (dbElementProperties.Count > 0)
             {
                 importResult = importResult with
@@ -511,8 +529,8 @@ public partial class MainWindowViewModel : ViewModelBase
             OnPropertyChanged(nameof(CanRepairDestroyedElements));
 
             ActiveConstructName = string.IsNullOrWhiteSpace(importResult.BlueprintName)
-                ? $"Blueprint {bp.Id.ToString(CultureInfo.InvariantCulture)}"
-                : $"{importResult.BlueprintName} [BP {bp.Id.ToString(CultureInfo.InvariantCulture)}]";
+                ? $"{openingName} [BP {blueprintId.ToString(CultureInfo.InvariantCulture)}]"
+                : $"{importResult.BlueprintName} [BP {blueprintId.ToString(CultureInfo.InvariantCulture)}]";
 
             await ApplyLoadedPropertyCollectionsAsync(
                 importResult.Properties,
@@ -524,10 +542,10 @@ public partial class MainWindowViewModel : ViewModelBase
                 progressUpdate: null,
                 progressStart: 0d,
                 progressEnd: 100d);
-            UpdateBlueprintSummary(importResult);
+            UpdateDatabaseBlueprintSummary(importResult, blueprintId, openingName);
 
             string openMessage =
-                $"Opened blueprint {bp.Id.ToString(CultureInfo.InvariantCulture)} in Construct Browser ({importResult.ElementCount.ToString(CultureInfo.InvariantCulture)} element(s)).";
+                $"Opened blueprint {blueprintId.ToString(CultureInfo.InvariantCulture)} in Construct Browser ({importResult.ElementCount.ToString(CultureInfo.InvariantCulture)} element(s)).";
             BlueprintsStatus = openMessage;
             StatusMessage = openMessage;
             return true;
@@ -535,12 +553,14 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (OperationCanceledException)
         {
             BlueprintsStatus = "Open blueprint cancelled.";
+            StatusMessage = "Open blueprint cancelled.";
             return false;
         }
         catch (Exception ex)
         {
             RestoreElementFilters(filterSnapshot, applyFilter: false);
             BlueprintsStatus = $"Open failed: {ex.Message}";
+            StatusMessage = $"DB load failed: {ex.Message}";
             return false;
         }
         finally

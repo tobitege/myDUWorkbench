@@ -37,6 +37,8 @@ public sealed class WorkbenchSettings
     public string LastSavedFolder { get; set; } = string.Empty;
     public ulong? SelectedConstructSuggestionId { get; set; }
     public string SelectedConstructSuggestionName { get; set; } = string.Empty;
+    public ConstructSuggestionKind SelectedConstructSuggestionKind { get; set; } = ConstructSuggestionKind.Construct;
+    public bool IncludeBlueprintOnlySuggestions { get; set; }
     public string SelectedElementNodeKey { get; set; } = string.Empty;
     public string SelectedDpuyamlNodeKey { get; set; } = string.Empty;
     public string SelectedContent2NodeKey { get; set; } = string.Empty;
@@ -77,6 +79,8 @@ public sealed class PersistedWorkbenchSettings
     public string LastSavedFolder { get; set; } = string.Empty;
     public ulong? SelectedConstructSuggestionId { get; set; }
     public string SelectedConstructSuggestionName { get; set; } = string.Empty;
+    public ConstructSuggestionKind SelectedConstructSuggestionKind { get; set; } = ConstructSuggestionKind.Construct;
+    public bool IncludeBlueprintOnlySuggestions { get; set; }
     public string SelectedElementNodeKey { get; set; } = string.Empty;
     public string SelectedDpuyamlNodeKey { get; set; } = string.Empty;
     public string SelectedContent2NodeKey { get; set; } = string.Empty;

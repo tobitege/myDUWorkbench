@@ -95,6 +95,10 @@
                                     </Grid>
                                     <CheckBox Content="Limit to selected player constructs"
                                               IsChecked="{Binding LimitToSelectedPlayerConstructs}" />
+                                    <CheckBox Content="Blueprints"
+                                              IsChecked="{Binding IncludeBlueprintOnlySuggestions}"
+                                              IsEnabled="{Binding LimitToSelectedPlayerConstructs}"
+                                              ToolTip.Tip="Include blueprints-only" />
                                 </StackPanel>
                             </Border>
 

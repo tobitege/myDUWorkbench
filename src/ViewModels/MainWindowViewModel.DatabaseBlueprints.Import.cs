@@ -30,13 +30,22 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        ulong? constructId = TryParseOptionalUlong(ConstructIdInput);
+        ConstructNameLookupRecord? selectedSuggestion = ResolveSelectedConstructSuggestionForLoad(constructId);
+        if (selectedSuggestion?.Kind == ConstructSuggestionKind.Blueprint)
+        {
+            await OpenBlueprintInConstructBrowserAsync(
+                selectedSuggestion.ConstructId,
+                selectedSuggestion.ConstructName,
+                cts.Token);
+            return;
+        }
 
         try
         {
             IsBusy = true;
             StatusMessage = "Loading construct snapshot from PostgreSQL...";
 
-            ulong? constructId = TryParseOptionalUlong(ConstructIdInput);
             ulong? playerId = TryParseOptionalUlong(PlayerIdInput);
             int propertyLimit = ParsePropertyLimit(PropertyLimitInput);
             DataConnectionOptions options = BuildDbOptions();

@@ -60,6 +60,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private bool _startupAutoLoadPending;
     private ulong? _restoredConstructSuggestionId;
     private string _restoredConstructSuggestionName = string.Empty;
+    private ConstructSuggestionKind _restoredConstructSuggestionKind = ConstructSuggestionKind.Construct;
     private string _selectedElementNodeKey = string.Empty;
     private string _selectedDpuyamlNodeKey = string.Empty;
     private string _selectedContent2NodeKey = string.Empty;
@@ -200,6 +201,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool limitToSelectedPlayerConstructs = true;
+
+    [ObservableProperty]
+    private bool includeBlueprintOnlySuggestions;
 
     [ObservableProperty]
     private bool autoConnectDatabase;

@@ -614,6 +614,60 @@ public sealed partial class MyDuDataService
             cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ConstructNameLookupRecord>> GetBlueprintSuggestionsByCreatorSortedByNameAsync(
+        DataConnectionOptions options,
+        ulong creatorPlayerId,
+        string? nameFilter,
+        int maxRows,
+        CancellationToken cancellationToken)
+    {
+        if (maxRows <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxRows), "Blueprint list limit must be > 0.");
+        }
+
+        await using var connection = new NpgsqlConnection(BuildConnectionString(options));
+        await connection.OpenAsync(cancellationToken);
+
+        const string sql = """
+            SELECT b.id, b.name
+            FROM blueprint b
+            WHERE b.creator_id = @creatorId
+              AND COALESCE(b.name, '') NOT ILIKE '%<SNAPSHOT>%'
+              AND (@namePattern IS NULL OR b.name ILIKE @namePattern)
+            ORDER BY b.name, b.id
+            LIMIT @maxRows;
+            """;
+
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        string? namePattern = string.IsNullOrWhiteSpace(nameFilter)
+            ? null
+            : BuildSqlLikePattern(nameFilter);
+        cmd.Parameters.Add(new NpgsqlParameter("creatorId", NpgsqlTypes.NpgsqlDbType.Bigint)
+        {
+            Value = (long)creatorPlayerId
+        });
+        cmd.Parameters.Add(new NpgsqlParameter("namePattern", NpgsqlTypes.NpgsqlDbType.Text)
+        {
+            Value = namePattern is null ? DBNull.Value : namePattern
+        });
+        cmd.Parameters.AddWithValue("maxRows", maxRows);
+
+        var records = new List<ConstructNameLookupRecord>(maxRows);
+        await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            ulong blueprintId = TryGetUInt64(reader, 0) ?? 0UL;
+            string blueprintName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            records.Add(new ConstructNameLookupRecord(
+                blueprintId,
+                blueprintName,
+                ConstructSuggestionKind.Blueprint));
+        }
+
+        return records;
+    }
+
     public Task<IReadOnlyList<UserConstructRecord>> GetUserConstructsSortedByIdAsync(
         DataConnectionOptions options,
         ulong userId,

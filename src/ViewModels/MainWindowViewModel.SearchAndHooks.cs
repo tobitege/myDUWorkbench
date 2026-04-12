@@ -41,6 +41,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             ConstructNameLookupRecord? restored = ConstructNameSuggestions.FirstOrDefault(s =>
                 s.ConstructId == _restoredConstructSuggestionId.Value &&
+                s.Kind == _restoredConstructSuggestionKind &&
                 (string.IsNullOrWhiteSpace(_restoredConstructSuggestionName) ||
                  string.Equals(s.ConstructName, _restoredConstructSuggestionName, StringComparison.OrdinalIgnoreCase)));
             if (restored is not null)
@@ -61,7 +62,8 @@ public partial class MainWindowViewModel : ViewModelBase
         if (SelectedConstructNameSuggestion is not null)
         {
             ConstructNameLookupRecord? current = ConstructNameSuggestions.FirstOrDefault(s =>
-                s.ConstructId == SelectedConstructNameSuggestion.ConstructId);
+                s.ConstructId == SelectedConstructNameSuggestion.ConstructId &&
+                s.Kind == SelectedConstructNameSuggestion.Kind);
             if (current is not null)
             {
                 return current;
@@ -87,7 +89,11 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        ConstructSearchStatus = hasPlayerScope ? "Loading player constructs..." : "Searching...";
+        ConstructSearchStatus = hasPlayerScope
+            ? (IncludeBlueprintOnlySuggestions
+                ? "Loading player constructs and blueprints..."
+                : "Loading player constructs...")
+            : "Searching...";
         var cts = new CancellationTokenSource();
         _constructSearchCts = cts;
         _ = RefreshConstructNameSuggestionsAsync(input, hasPlayerScope ? scopedPlayerId : null, cts.Token);
@@ -111,11 +117,20 @@ public partial class MainWindowViewModel : ViewModelBase
                     scopedPlayerId.Value,
                     2000,
                     cancellationToken);
+                IReadOnlyList<ConstructNameLookupRecord> playerBlueprints = IncludeBlueprintOnlySuggestions
+                    ? await _dataService.GetBlueprintSuggestionsByCreatorSortedByNameAsync(
+                        options,
+                        scopedPlayerId.Value,
+                        nameFilter: null,
+                        2000,
+                        cancellationToken)
+                    : Array.Empty<ConstructNameLookupRecord>();
 
                 string normalizedFilter = input?.Trim() ?? string.Empty;
                 IEnumerable<ConstructNameLookupRecord> scopedResults = userConstructs
-                    .Select(c => new ConstructNameLookupRecord(c.ConstructId, c.ConstructName))
-                    .GroupBy(c => c.ConstructId)
+                    .Select(c => new ConstructNameLookupRecord(c.ConstructId, c.ConstructName, ConstructSuggestionKind.Construct))
+                    .Concat(playerBlueprints)
+                    .GroupBy(c => (c.ConstructId, c.Kind))
                     .Select(g => g.First());
                 totalScopedResultCount = scopedResults.Count();
 
@@ -127,7 +142,8 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
 
                 results = scopedResults
-                    .OrderBy(c => c.ConstructName, StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(c => c.Kind == ConstructSuggestionKind.Blueprint ? 1 : 0)
+                    .ThenBy(c => c.ConstructName, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(c => c.ConstructId)
                     .ToList();
             }
@@ -162,7 +178,8 @@ public partial class MainWindowViewModel : ViewModelBase
                     scopedPlayerId.Value,
                     ConstructNameSuggestions.Count,
                     input,
-                    totalScopedResultCount)
+                    totalScopedResultCount,
+                    IncludeBlueprintOnlySuggestions)
                 : $"{ConstructNameSuggestions.Count} found";
         }
         catch (OperationCanceledException)
@@ -428,15 +445,29 @@ public partial class MainWindowViewModel : ViewModelBase
         ulong scopedPlayerId,
         int filteredCount,
         string? input,
-        int totalScopedResultCount)
+        int totalScopedResultCount,
+        bool includeBlueprintOnlySuggestions)
     {
         string normalizedFilter = input?.Trim() ?? string.Empty;
+        string scopeSuffix = includeBlueprintOnlySuggestions ? " incl. blueprints" : string.Empty;
         if (string.IsNullOrWhiteSpace(normalizedFilter))
         {
-            return $"{filteredCount} for player {scopedPlayerId}";
+            return $"{filteredCount} for player {scopedPlayerId}{scopeSuffix}";
         }
 
-        return $"{filteredCount}/{totalScopedResultCount} for player {scopedPlayerId}";
+        return $"{filteredCount}/{totalScopedResultCount} for player {scopedPlayerId}{scopeSuffix}";
+    }
+
+    private ConstructNameLookupRecord? ResolveSelectedConstructSuggestionForLoad(ulong? constructId)
+    {
+        if (!constructId.HasValue || constructId.Value == 0UL || SelectedConstructNameSuggestion is null)
+        {
+            return null;
+        }
+
+        return SelectedConstructNameSuggestion.ConstructId == constructId.Value
+            ? SelectedConstructNameSuggestion
+            : null;
     }
 
     private void UpdateDatabaseSummary(DatabaseConstructSnapshot snapshot)
@@ -489,6 +520,31 @@ public partial class MainWindowViewModel : ViewModelBase
         sb.AppendLine($"Source: {importResult.SourceName}");
         sb.AppendLine($"Name: {importResult.BlueprintName}");
         sb.AppendLine($"BlueprintId: {FormatBlueprintIdForDisplay(importResult.BlueprintId, "<none>")}");
+        sb.AppendLine($"Elements: {importResult.ElementCount.ToString(CultureInfo.InvariantCulture)}");
+        sb.AppendLine($"Properties loaded: {importResult.Properties.Count.ToString(CultureInfo.InvariantCulture)}");
+        if (!string.IsNullOrWhiteSpace(importResult.ImportPipeline))
+        {
+            sb.AppendLine($"Import pipeline: {importResult.ImportPipeline}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(importResult.ImportNotes))
+        {
+            sb.AppendLine($"Import notes: {importResult.ImportNotes}");
+        }
+
+        DatabaseSummary = sb.ToString();
+    }
+
+    private void UpdateDatabaseBlueprintSummary(
+        BlueprintImportResult importResult,
+        ulong blueprintId,
+        string? blueprintName)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Blueprint from PostgreSQL");
+        sb.AppendLine($"BlueprintId: {blueprintId.ToString(CultureInfo.InvariantCulture)}");
+        sb.AppendLine($"Name: {(string.IsNullOrWhiteSpace(importResult.BlueprintName) ? blueprintName ?? string.Empty : importResult.BlueprintName)}");
+        sb.AppendLine($"Source: blueprint_{blueprintId.ToString(CultureInfo.InvariantCulture)}");
         sb.AppendLine($"Elements: {importResult.ElementCount.ToString(CultureInfo.InvariantCulture)}");
         sb.AppendLine($"Properties loaded: {importResult.Properties.Count.ToString(CultureInfo.InvariantCulture)}");
         if (!string.IsNullOrWhiteSpace(importResult.ImportPipeline))
@@ -662,6 +718,17 @@ public partial class MainWindowViewModel : ViewModelBase
         PersistSettingsNow();
     }
 
+    partial void OnIncludeBlueprintOnlySuggestionsChanged(bool value)
+    {
+        if (_isRestoringSettings || _isStartupInitializing)
+        {
+            return;
+        }
+
+        QueueConstructNameSearch(ConstructNameSearchInput);
+        PersistSettingsNow();
+    }
+
     partial void OnAutoConnectDatabaseChanged(bool value)
     {
         RefreshAutoConnectLoopState();
@@ -790,11 +857,13 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             _restoredConstructSuggestionId = null;
             _restoredConstructSuggestionName = string.Empty;
+            _restoredConstructSuggestionKind = ConstructSuggestionKind.Construct;
             return;
         }
 
         _restoredConstructSuggestionId = value.ConstructId;
         _restoredConstructSuggestionName = value.ConstructName;
+        _restoredConstructSuggestionKind = value.Kind;
 
         if (_isRestoringSettings || _suppressConstructSelectionAutoLoad)
         {

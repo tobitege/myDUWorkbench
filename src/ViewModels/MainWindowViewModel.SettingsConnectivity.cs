@@ -158,6 +158,7 @@ public partial class MainWindowViewModel : ViewModelBase
         AutoLoadOnStartup = settings.AutoLoadOnStartup;
         AutoLoadPlayerNames = settings.AutoLoadPlayerNames;
         LimitToSelectedPlayerConstructs = settings.LimitToSelectedPlayerConstructs;
+        IncludeBlueprintOnlySuggestions = settings.IncludeBlueprintOnlySuggestions;
         AutoConnectDatabase = settings.AutoConnectDatabase;
         AutoConnectRetrySeconds = ClampAutoConnectRetrySeconds(settings.AutoConnectRetrySeconds);
         AutoWrapContent = settings.AutoWrapContent;
@@ -176,6 +177,9 @@ public partial class MainWindowViewModel : ViewModelBase
         _restoredConstructSuggestionName = hasExplicitlyClearedPlayerFilter
             ? string.Empty
             : settings.SelectedConstructSuggestionName ?? string.Empty;
+        _restoredConstructSuggestionKind = hasExplicitlyClearedPlayerFilter
+            ? ConstructSuggestionKind.Construct
+            : settings.SelectedConstructSuggestionKind;
         if (!hasExplicitlyClearedPlayerFilter &&
             hasPersistedConstructContext &&
             !_restoredConstructSuggestionId.HasValue &&
@@ -190,7 +194,8 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             var restoredSuggestion = new ConstructNameLookupRecord(
                 _restoredConstructSuggestionId.Value,
-                _restoredConstructSuggestionName);
+                _restoredConstructSuggestionName,
+                _restoredConstructSuggestionKind);
             ConstructNameSuggestions.Clear();
             ConstructNameSuggestions.Add(restoredSuggestion);
             SetSelectedConstructSuggestion(restoredSuggestion, suppressAutoLoad: true);
@@ -210,6 +215,7 @@ public partial class MainWindowViewModel : ViewModelBase
         bool hasClearedPlayerFilter = string.IsNullOrWhiteSpace(PlayerIdInput);
         ulong? selectedConstructId = SelectedConstructNameSuggestion?.ConstructId;
         string selectedConstructName = SelectedConstructNameSuggestion?.ConstructName ?? string.Empty;
+        ConstructSuggestionKind selectedConstructKind = SelectedConstructNameSuggestion?.Kind ?? ConstructSuggestionKind.Construct;
         return new WorkbenchSettings
         {
             ConstructIdInput = hasClearedPlayerFilter ? string.Empty : ConstructIdInput,
@@ -233,6 +239,7 @@ public partial class MainWindowViewModel : ViewModelBase
             AutoLoadOnStartup = AutoLoadOnStartup,
             AutoLoadPlayerNames = AutoLoadPlayerNames,
             LimitToSelectedPlayerConstructs = LimitToSelectedPlayerConstructs,
+            IncludeBlueprintOnlySuggestions = IncludeBlueprintOnlySuggestions,
             AutoConnectDatabase = AutoConnectDatabase,
             AutoConnectRetrySeconds = ClampAutoConnectRetrySeconds(AutoConnectRetrySeconds),
             AutoWrapContent = AutoWrapContent,
@@ -241,6 +248,7 @@ public partial class MainWindowViewModel : ViewModelBase
             LastSavedFolder = LastSavedFolder,
             SelectedConstructSuggestionId = hasClearedPlayerFilter ? null : selectedConstructId,
             SelectedConstructSuggestionName = hasClearedPlayerFilter ? string.Empty : selectedConstructName,
+            SelectedConstructSuggestionKind = hasClearedPlayerFilter ? ConstructSuggestionKind.Construct : selectedConstructKind,
             SelectedElementNodeKey = _selectedElementNodeKey,
             SelectedDpuyamlNodeKey = _selectedDpuyamlNodeKey,
             SelectedContent2NodeKey = _selectedContent2NodeKey,
