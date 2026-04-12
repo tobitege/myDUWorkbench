@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Ensure release runs from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Releases can only be run from the main branch."
+          exit 1
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Read app version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content src/myDUWorkbench.csproj
+          $version = $project.Project.PropertyGroup.Version
+
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Version not found in src/myDUWorkbench.csproj"
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          "artifact_name=myDUWorkbench-win-x64-v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Check that tag does not already exist
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          git fetch --tags
+          $existingTag = git tag -l $tag
+
+          if ($existingTag -eq $tag) {
+            throw "Tag $tag already exists."
+          }
+
+      - name: Publish self-contained app
+        run: >
+          dotnet publish src/myDUWorkbench.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -o publish
+
+      - name: Create release archive
+        shell: pwsh
+        run: |
+          $archive = "${{ steps.version.outputs.artifact_name }}.zip"
+          Compress-Archive -Path publish\* -DestinationPath $archive
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.version.outputs.artifact_name }}
+          path: ${{ steps.version.outputs.artifact_name }}.zip
+
+      - name: Create and push tag
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag $tag
+          git push origin $tag
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          files: ${{ steps.version.outputs.artifact_name }}.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
